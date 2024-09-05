@@ -1,1 +1,2 @@
+git+https://github.com/BitMind-AI/bitmind-subnet.git@llm-annotation-moderation
 wandb==0.17.6
