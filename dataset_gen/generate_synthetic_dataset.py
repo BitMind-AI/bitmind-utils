@@ -68,6 +68,7 @@ def parse_arguments():
     --generate_synthetic_images (bool): Optional. Flag to generate synthetic images.
     --upload_synthetic_images (bool): Optional. Flag to upload synthetic images to Hugging Face.
     --hf_token (str): Required for interfacing with Hugging Face.
+    
     parser.add_argument('--start_index', type=int, default=0, help='Start index for processing the dataset.')
     parser.add_argument('--end_index', type=int, default=None, help='End index (exclusive) for processing the dataset.')
     """
@@ -89,6 +90,7 @@ def parse_arguments():
     parser.add_argument('--hf_token', type=str, default=None, help='Token for uploading to Hugging Face.')
     parser.add_argument('--start_index', type=int, default=0, required=True, help='Start index for processing the dataset. Default to the first index.')
     parser.add_argument('--end_index', type=int, default=None, required=True, help='End index for processing the dataset. Default to the last index.')
+    parser.add_argument('--gpu_id', type=int, default=0, required=True, help='Which GPU to use (check nvidia-smi -L).')
     parser.add_argument('--no-resize', action='store_false', dest='resize', help='Do not resize to target image size from BitMind constants.')
     parser.add_argument('--resize_existing', action='store_true', default=False, required=False, help='Resize existing image files.')
     return parser.parse_args()
@@ -190,6 +192,7 @@ def generate_and_save_synthetic_images(annotations_dir, synthetic_image_generato
     duration = time.time() - start_time
     print(f"All {total_images} synthetic images generated in {duration:.2f} seconds.")
     print(f"Mean synthetic images generation time: {duration/max(total_images, 1):.2f} seconds.")
+    
 
 def main():
     args = parse_arguments()
@@ -199,37 +202,46 @@ def main():
     model_name = args.diffusion_model.split('/')[-1]
     hf_synthetic_images_name = f"{hf_dataset_name}___{data_range}___{model_name}"
     annotations_dir = f'test_data/annotations/{args.real_image_dataset_name}'
+    annotations_chunk_dir = Path(f"{annotations_dir}/{args.start_index}_{args.end_index}/")
     real_image_samples_dir = f'test_data/real_images/{args.real_image_dataset_name}'
     synthetic_images_dir = f'test_data/synthetic_images/{args.real_image_dataset_name}'
+    synthetic_images_chunk_dir = Path(f'{synthetic_images_dir}/{args.start_index}_{args.end_index}/')
     os.makedirs(annotations_dir, exist_ok=True)
     os.makedirs(synthetic_images_dir, exist_ok=True)
-
-    synthetic_image_generator = SyntheticImageGenerator(
-        prompt_type='annotation', use_random_diffuser=False, diffuser_name=args.diffusion_model)
                 
     batch_size = 16
-
+    
+    synthetic_image_generator = None
     # Generate or download annotations to local storage.
     if args.download_annotations and dataset_exists_on_hf(hf_annotations_name, args.hf_token):
+        synthetic_image_generator = SyntheticImageGenerator(prompt_type='none',
+                                                    use_random_diffuser=False,
+                                                    diffuser_name=args.diffusion_model)
         print("Annotations exist on Hugging Face.")
         # Check if the annotations are already saved locally
-        if not Path(annotations_dir).is_dir() or not any(Path(annotations_dir).iterdir()):
-            print(f"Downloading annotations from {hf_annotations_name} and saving annotations to {annotations_dir}.")
+        
+        annotations_chunk_dir.mkdir(parents=True, exist_ok=True)
+        if not annotations_chunk_dir.is_dir() or not any(annotations_chunk_dir.iterdir()):
+            print(f"Downloading annotations from {hf_annotations_name} and saving annotations to {annotations_chunk_dir}.")
             # Download annotations from Hugging Face
             all_annotations = load_dataset(hf_annotations_name, split='train', keep_in_memory=False)
             df_annotations = pd.DataFrame(all_annotations)
+            all_annotations = None
             # Ensure the index is of integer type and sort by it
             df_annotations['id'] = df_annotations['id'].astype(int)
             df_annotations.sort_values('id', inplace=True)
             # Slice specified chunk
             annotations_chunk = df_annotations.iloc[args.start_index:args.end_index]
-            all_annotations = None
+            df_annotations = None
              # Save the chunk as JSON files on disk
-            save_as_json(annotations_chunk, annotations_dir)
+            save_as_json(annotations_chunk, annotations_chunk_dir)
             annotations_chunk = None
         else:
             print("Annotations already saved to disk.")
     elif not args.skip_generate_annotations:
+        synthetic_image_generator = SyntheticImageGenerator(prompt_type='annotation',
+                                            use_random_diffuser=False,
+                                            diffuser_name=args.diffusion_model)
         print("Generating new annotations.")
         all_images = ImageDataset(hf_dataset_name, 'train')
         images_chunk = slice_dataset(all_images.dataset, start_index=args.start_index, end_index=args.end_index)
@@ -238,39 +250,43 @@ def main():
                                       args.start_index,
                                       hf_dataset_name,
                                       synthetic_image_generator,
-                                      annotations_dir,
+                                      annotations_chunk_dir,
                                       batch_size=batch_size)
         images_chunk = None # Free up memory
         
-        # Upload to Hugging Face
-        if args.upload_annotations and args.hf_token:
-            start_time = time.time()
-            print("Uploading annotations to HF.")
-            print("Loading annotations dataset.")
-            annotations_dataset = load_and_sort_dataset(annotations_dir, 'json')
-            print("Uploading annotations of " + args.real_image_dataset_name + " to Hugging Face.")
-            upload_to_huggingface(annotations_dataset, hf_annotations_name, args.hf_token)
-            print(f"Annotations uploaded to Hugging Face in {time.time() - start_time:.2f} seconds.")
+    # Upload to Hugging Face
+    if args.upload_annotations and args.hf_token:
+        start_time = time.time()
+        print("Uploading annotations to HF.")
+        print("Loading annotations dataset.")
+        annotations_dataset = load_and_sort_dataset(annotations_chunk_dir, 'json')
+        print("Uploading annotations of " + args.real_image_dataset_name + " to Hugging Face.")
+        upload_to_huggingface(annotations_dataset, hf_annotations_name, args.hf_token)
+        print(f"Annotations uploaded to Hugging Face in {time.time() - start_time:.2f} seconds.")
 
     # Generate synthetic images to local storage.
     if args.generate_synthetic_images:
-        synthetic_image_generator.load_diffuser(diffuser_name=args.diffusion_model)
-        generate_and_save_synthetic_images(annotations_dir, synthetic_image_generator,
-                                           synthetic_images_dir, args.start_index, args.end_index,
+        if synthetic_image_generator.image_annotation_generator:
+            synthetic_image_generator.image_annotation_generator.clear_gpu()
+        synthetic_image_generator.load_diffuser(diffuser_name=args.diffusion_model, gpu_id=args.gpu_id)
+        synthetic_images_chunk_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Generating and saving images to {synthetic_images_chunk_dir}.")
+        generate_and_save_synthetic_images(annotations_chunk_dir, synthetic_image_generator,
+                                           synthetic_images_chunk_dir, args.start_index, args.end_index,
                                            batch_size=batch_size, resize=args.resize)
     
         synthetic_image_generator.clear_gpu()
     
     if args.resize_existing:
-        print(f"Resizing images in {synthetic_images_dir}.")
-        resize_images_in_directory(synthetic_images_dir)
+        print(f"Resizing images in {synthetic_images_chunk_dir}.")
+        resize_images_in_directory(synthetic_images_chunk_dir)
         hf_synthetic_images_name += f"___{TARGET_IMAGE_SIZE[0]}"
         print(f"Done resizing existing images.")
 
     if args.upload_synthetic_images and args.hf_token:
         start_time = time.time()
         print("Loading synthetic image dataset.")
-        synthetic_image_dataset = load_and_sort_dataset(synthetic_images_dir, 'image')
+        synthetic_image_dataset = load_and_sort_dataset(synthetic_images_chunk_dir, 'image')
         print("Uploading synthetic image mirrors of " + args.real_image_dataset_name + " to Hugging Face.")
         upload_to_huggingface(synthetic_image_dataset, hf_synthetic_images_name, args.hf_token)
         print(f"Synthetic images uploaded in {time.time() - start_time:.2f} seconds.")
