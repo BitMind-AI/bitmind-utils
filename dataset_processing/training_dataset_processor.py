@@ -289,7 +289,7 @@ class TrainingDatasetProcessor:
                 if transform:
                     images = self._apply_transform_to_images(batch['image'], transform)
                 else:
-                    images = [T.ToPILImage()(image) for image in images]
+                    images = [T.ToPILImage()(image) for image in batch['image']]
                 valid_faces_present, valid_faces, valid_landmarks, valid_masks = self._process_faces(images)
                 if any(valid_faces_present):
                     valid_data = \
@@ -349,14 +349,13 @@ class TrainingDatasetProcessor:
             print(f"Loading {meta['path']}...")
             dataset = ImageDataset(meta['path'],
                                    meta.get('name', None),
-                                   create_splits=False,
                                    download_mode=meta.get('download_mode', None))
 
             if hf_root: dest_repo_path = hf_root+'/'+meta['path'].split('/')[1] + '_training'
             else: dest_repo_path = meta['path'] + '_training'
             local_preprocessed_path = os.getcwd()+'/'+dest_repo_path.split('/')[1]
             if transform_info: local_preprocessed_path+='_'+transform_info[0]
-            else: local_preprocessed_path+='_untransformed"
+            else: local_preprocessed_path+='_untransformed'
 
             print(f"local_preprocessed_path: {local_preprocessed_path}")
             # Otherwise, generate new preprocessed dataset
@@ -401,7 +400,7 @@ class TrainingDatasetProcessor:
                 self.load_preprocess_upload_datasets(self.dataset_meta['fake'], transform_info, save_locally, hf_root)
                 self.load_preprocess_upload_datasets(self.dataset_meta['real'], transform_info, save_locally, hf_root)
         else:
-            print(f"No transforms: {self.transforms}")
+            print(f"No transforms: self.transforms=={self.transforms}")
             self.load_preprocess_upload_datasets(self.dataset_meta['fake'], None, save_locally, hf_root)
             
         

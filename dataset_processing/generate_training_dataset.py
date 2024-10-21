@@ -24,12 +24,14 @@ from bitmind.constants import DATASET_META
 
 FACE_DATASET_META = {
     "real": [
-        {"path": "bitmind/ffhq-256", "create_splits": False},
-        {"path": "bitmind/celeb-a-hq", "create_splits": False}
+        # {"path": "bitmind/ffhq-256", "create_splits": False},
+        # {"path": "bitmind/celeb-a-hq", "create_splits": False}
     ],
     "fake": [
-        {"path": "bitmind/celeb-a-hq___stable-diffusion-xl-base-1.0___256", "create_splits": False},
-        {"path": "bitmind/ffhq-256___stable-diffusion-xl-base-1.0", "create_splits": False}
+        # {"path": "bitmind/celeb-a-hq___stable-diffusion-xl-base-1.0___256", "create_splits": False},
+        # {"path": "bitmind/ffhq-256___stable-diffusion-xl-base-1.0", "create_splits": False}
+        {"path": "bitmind/celeb-a-hq___FLUX.1-dev", "create_splits": False},
+        {"path": "bitmind/ffhq-256___FLUX.1-dev", "create_splits": False}
     ]
 }
 
