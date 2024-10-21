@@ -1,23 +1,30 @@
 
 
-def compute_metrics(tp=0, fp=0, tn=0, fn=0):
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+
+
+def compute_metrics(predictions, labels):
     """
-    Compute precision, recall, and F1 score from tp, fp, fn.
+    Compute accuracy, precision, recall, and F1 score from predictions and labels.
 
     Parameters:
-    tp (int): True positives
-    fp (int): False positives
-    fn (int): False negatives
+    predictions (list): List of predicted values
+    labels (list): List of true labels
 
     Returns:
-    dict: A dictionary with precision, recall, and F1 score
+    dict: A dictionary with accuracy, precision, recall, and F1 score
     """
-    prec = tp / (tp + fp) if (tp + fp) > 0 else 0
-    rec = tp / (tp + fn) if (tp + fn) > 0 else 0
+    accuracy = accuracy_score(labels, [1 if p > 0.5 else 0 for p in predictions])
+    precision = precision_score(labels, [1 if p > 0.5 else 0 for p in predictions], zero_division=0)
+    recall = recall_score(labels, [1 if p > 0.5 else 0 for p in predictions], zero_division=0)
+    f1 = f1_score(labels, [1 if p > 0.5 else 0 for p in predictions], zero_division=0)
+    roc_auc = roc_auc_score(labels, predictions)
+    
     return {
-        "accuracy": (tp + tn) / (tp + fp + tn + fn),
-        "precision": prec,
-        "recall": rec,
-        "f1_score": 2 * (prec * rec) / (prec + rec) if (prec + rec) > 0 else 0,
-        "sample_size": tp + tn + fp + fn
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "auc": roc_auc,
+        "sample_size": len(predictions)
     }
