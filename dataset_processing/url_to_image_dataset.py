@@ -102,8 +102,17 @@ def main(args):
     DESTINATION_DATASET_NAME = args.destination_dataset_name
 
     # Load the original dataset from Hugging Face
-    dataset = load_dataset(URL_DATASET_NAME)
+    dataset = load_dataset(URL_DATASET_NAME, split='train')
 
+    # Check if the destination dataset exists and get the existing indices
+    existing_indices = set()
+    try:
+        existing_dataset = load_dataset(DESTINATION_DATASET_NAME, split='train')
+        existing_indices = set(existing_dataset['original_index'])
+        print(f"Found existing dataset. Skipping indices: {existing_indices}")
+    except Exception as e:
+        print(f"No existing dataset found with name {DESTINATION_DATASET_NAME}. Starting fresh. {e}")
+    
     # Directory to store images temporarily
     output_dir = "processed_images"
     os.makedirs(output_dir, exist_ok=True)
@@ -111,26 +120,24 @@ def main(args):
     processed_data = {
         "original_index": [],
         "url": [],
-        "image_file": []
+        "image": []
     }
 
     for i, item in enumerate(tqdm(dataset)):
-        url = item['url']  # Adjust if 'url' is under a different field
-
-        # The original index should be the current index of the image in the dataset
-        original_index = i
-
         # Process the image
-        image = process_image(url, max_wait=MAX_BACKOFF_TIME)
+        image = process_image(item['url'], max_wait=MAX_BACKOFF_TIME)
+        if item['index'] in existing_indices:
+            print(f"Index {item['index']} already processed, skipping.")
+            continue
 
         if image:
             image_filename = f"{i}.jpg"
             image_path = os.path.join(output_dir, image_filename)
             image.save(image_path, format="JPEG")
 
-            processed_data["original_index"].append(original_index)
-            processed_data["url"].append(url)
-            processed_data["image_file"].append(image_path)
+            processed_data["original_index"].append(item['index'])
+            processed_data["url"].append(item['url'])
+            processed_data["image"].append(image_path)
 
         # Upload every BATCH_SIZE images
         if (i + 1) % BATCH_SIZE == 0:
@@ -140,7 +147,7 @@ def main(args):
             processed_data = {
                 "original_index": [],
                 "url": [],
-                "image_file": []
+                "image": []
             }
 
     # Final upload for any remaining images
@@ -156,13 +163,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=50000,
+        default=10000,
         help="Number of images to process before each batch upload."
     )
     parser.add_argument(
         "--max_backoff_time",
         type=int,
-        default=5,
+        default=1,
         help="Maximum backoff time in seconds before skipping a failed image."
     )
     parser.add_argument(
