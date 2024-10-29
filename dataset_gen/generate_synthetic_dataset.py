@@ -207,6 +207,7 @@ def main():
     synthetic_images_dir = f'test_data/synthetic_images/{args.real_image_dataset_name}'
     synthetic_images_chunk_dir = Path(f'{synthetic_images_dir}/{args.start_index}_{args.end_index}/')
     os.makedirs(annotations_dir, exist_ok=True)
+    os.makedirs(annotations_chunk_dir, exist_ok=True)
     os.makedirs(synthetic_images_dir, exist_ok=True)
                 
     batch_size = 16
