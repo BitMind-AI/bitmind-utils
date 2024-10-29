@@ -12,7 +12,7 @@ def compute_miner_performance(
         download_fake_images=False,
         validator_run_name=None):
 
-    miner_perf = defaultdict(lambda: {'predictions': [], 'labels': []})
+    miner_preds_labels = defaultdict(lambda: {'predictions': [], 'labels': []})
     fake_image_preds = defaultdict(dict)
     for run in wandb_validator_runs:
             
@@ -21,7 +21,7 @@ def compute_miner_performance(
 
         history_df = run.history()
         image_files = [f for f in run.files() if f.name.endswith(".png")]
-        for i, challenge_row in history_df.iterrows():
+        for _, challenge_row in history_df.iterrows():
             if start_ts is not None and challenge_row['_timestamp'] < start_ts:
                 continue
             if end_ts is not None and challenge_row['_timestamp'] > end_ts:
@@ -60,16 +60,20 @@ def compute_miner_performance(
 
                 if pred == -1:
                     continue
-                miner_perf[uid]['predictions'].append(pred)
-                miner_perf[uid]['labels'].append(label)
+
+                miner_preds_labels[uid]['predictions'].append(pred)
+                miner_preds_labels[uid]['labels'].append(label)
                             
-    metrics = {uid: compute_metrics(data['predictions'], data['labels']) for uid, data in miner_perf.items()}
+    metrics = {
+        uid: compute_metrics(data['predictions'], data['labels']) 
+        for uid, data in miner_preds_labels.items()
+    }
     flattened_metrics = []
     for uid, metric_dict in metrics.items():
         flattened_metrics.append({'uid': uid, **metric_dict})
     metrics_df = pd.DataFrame(flattened_metrics)
 
-    return metrics_df, fake_image_preds
+    return metrics_df, fake_image_preds, miner_preds_labels
 
 
 def compute_metrics(predictions, labels):
