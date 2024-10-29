@@ -170,7 +170,7 @@ def generate_and_save_synthetic_images(annotations_dir, synthetic_image_generato
             file_index = int(json_filename[:-5])  
         except ValueError:
             continue  # Skip files that don't match expected format
-        if start_index <= file_index < end_index:
+        if start_index <= file_index <= end_index:
             valid_files.append(json_filename)
 
     total_valid_files = len(valid_files)
