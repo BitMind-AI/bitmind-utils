@@ -243,6 +243,7 @@ def main():
         synthetic_image_generator = SyntheticImageGenerator(prompt_type='annotation',
                                             use_random_diffuser=False,
                                             diffuser_name=args.diffusion_model)
+        synthetic_image_generator.image_annotation_generator.load_models()
         print("Generating new annotations.")
         all_images = ImageDataset(hf_dataset_name, 'train')
         images_chunk = slice_dataset(all_images.dataset, start_index=args.start_index, end_index=args.end_index)
@@ -253,6 +254,7 @@ def main():
                                       synthetic_image_generator,
                                       annotations_chunk_dir,
                                       batch_size=batch_size)
+        synthetic_image_generator.image_annotation_generator.clear_gpu()
         images_chunk = None # Free up memory
         
     # Upload to Hugging Face
