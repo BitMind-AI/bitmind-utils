@@ -54,22 +54,18 @@ def upload_to_huggingface(dataset, repo_name, token):
     api.create_repo(repo_name, repo_type="dataset", private=False, token=token)
     dataset.push_to_hub(repo_name)
 
-def slice_dataset(dataset, start_index, end_index=None):
+def slice_dataset(dataset, start_index=0, end_index=None):
     """
-    Slice the dataset according to provided start and end indices.
-
-    Parameters:
-    dataset (Dataset): The dataset to be sliced.
-    start_index (int): The index of the first element to include in the slice.
-    end_index (int, optional): The index of the last element to include in the slice. If None, slices to the end of the dataset.
-
-    Returns:
-    Dataset: The sliced dataset.
+    Slice a dataset from start_index to end_index (inclusive).
+    
+    Args:
+        dataset: The dataset to slice
+        start_index (int): The starting index (inclusive)
+        end_index (int): The ending index (inclusive)
     """
-    if end_index is not None and end_index < len(dataset):
-        return dataset.select(range(start_index, end_index))
-    else:
-        return dataset.select(range(start_index, len(dataset)))
+    if end_index is not None:
+        return dataset.select(range(start_index, end_index + 1))
+    return dataset.select(range(start_index, len(dataset)))
 
 def save_as_json(df, output_dir):
     os.makedirs(output_dir, exist_ok=True)  # Ensure the directory exists

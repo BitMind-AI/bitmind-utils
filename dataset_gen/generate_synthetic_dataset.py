@@ -69,8 +69,8 @@ def parse_arguments():
     --upload_synthetic_images (bool): Optional. Flag to upload synthetic images to Hugging Face.
     --hf_token (str): Required for interfacing with Hugging Face.
     
-    parser.add_argument('--start_index', type=int, default=0, help='Start index for processing the dataset.')
-    parser.add_argument('--end_index', type=int, default=None, help='End index (exclusive) for processing the dataset.')
+    parser.add_argument('--start_index', type=int, default=0, help='Start index (inclusive) for processing the dataset.')
+    parser.add_argument('--end_index', type=int, default=None, help='End index (inclusive) for processing the dataset.')
     """
     parser = argparse.ArgumentParser(description='Generate synthetic images and annotations from a real dataset.')
     parser.add_argument('--hf_org', type=str, required=True, help='Hugging Face org name.')
@@ -197,7 +197,7 @@ def generate_and_save_synthetic_images(annotations_dir, synthetic_image_generato
 def main():
     args = parse_arguments()
     hf_dataset_name = f"{args.hf_org}/{args.real_image_dataset_name}"
-    data_range = f"{args.start_index}-to-{args.end_index-1}"
+    data_range = f"{args.start_index}-to-{args.end_index}"
     hf_annotations_name = f"{hf_dataset_name}___annotations"
     model_name = args.diffusion_model.split('/')[-1]
     hf_synthetic_images_name = f"{hf_dataset_name}___{data_range}___{model_name}"
@@ -231,7 +231,7 @@ def main():
             df_annotations['id'] = df_annotations['id'].astype(int)
             df_annotations.sort_values('id', inplace=True)
             # Slice specified chunk
-            annotations_chunk = df_annotations.iloc[args.start_index:args.end_index]
+            annotations_chunk = df_annotations.iloc[args.start_index:args.end_index + 1]
             df_annotations = None
              # Save the chunk as JSON files on disk
             save_as_json(annotations_chunk, annotations_chunk_dir)
