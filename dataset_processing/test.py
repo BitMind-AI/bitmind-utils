@@ -99,8 +99,22 @@ def load_and_push_to_hub(output_dir, repo_id, token, chunk_idx):
     image_dataset = image_dataset.map(extract_index_from_filename)['train']
 
     # Push the dataset to the Hub with a new split for each chunk (e.g., train_0, train_1, ...)
-    split_name = f"train_{chunk_idx}"
-    image_dataset.push_to_hub(repo_id, split=split_name, token=token)
+    config_name = f"chunk_{chunk_idx}"
+    # Retry logic for pushing the dataset
+    retry_attempts = 5
+    for attempt in range(retry_attempts):
+        try:
+            image_dataset.push_to_hub(repo_id, config_name=config_name, token=token)
+            print("Dataset pushed successfully.")
+            break  # Exit loop if successful
+        except Exception as e:
+            if "429" in str(e):  # Check for rate limit error
+                wait_time = 2 ** attempt  # Exponential backoff
+                print(f"Rate limit exceeded. Waiting for {wait_time} seconds...")
+                time.sleep(wait_time)
+            else:
+                print("An error occurred:", e)
+                break  # Exit on non-rate limit errors
 
 def main(args):
     print(f"Loading dataset from {args.dataset_id} (streaming mode enabled)...")
@@ -133,9 +147,9 @@ if __name__ == "__main__":
     
     parser.add_argument("--dataset_id", type=str, default="bitmind/open-images-v7", help="The dataset ID to load (default: 'bitmind/open-images-v7').")
     parser.add_argument("--num_threads", type=int, default=os.cpu_count() - 1, help="Number of threads for processing images")
-    parser.add_argument("--retries", type=int, default=0, help="Number of retries for downloading each image (default: 0).")
-    parser.add_argument("--timeout", type=int, default=None, help="Timeout in seconds for image requests (default: None).")
-    parser.add_argument("--chunk_size", type=int, default=1000, help="Number of rows to process before uploading (default: 1000).")
+    parser.add_argument("--retries", type=int, default=1, help="Number of retries for downloading each image (default: 0).")
+    parser.add_argument("--timeout", type=int, default=1, help="Timeout in seconds for image requests (default: None).")
+    parser.add_argument("--chunk_size", type=int, default=15000, help="Number of rows to process before uploading (default: 1000).")
     parser.add_argument("--dest_repo_id", type=str, default="bitmind/open-images-v7-jpg", help="Destination Hugging Face dataset repository ID (default: 'bitmind/open-images-v7-jpg').")
     parser.add_argument("--token", type=str, required=True, help="Hugging Face token for authentication and pushing to the repository.")
     
