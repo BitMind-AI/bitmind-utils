@@ -149,7 +149,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_threads", type=int, default=os.cpu_count() - 1, help="Number of threads for processing images")
     parser.add_argument("--retries", type=int, default=1, help="Number of retries for downloading each image (default: 0).")
     parser.add_argument("--timeout", type=int, default=1, help="Timeout in seconds for image requests (default: None).")
-    parser.add_argument("--chunk_size", type=int, default=15000, help="Number of rows to process before uploading (default: 1000).")
+    parser.add_argument("--chunk_size", type=int, default=50000, help="Number of rows to process before uploading (default: 1000).")
     parser.add_argument("--dest_repo_id", type=str, default="bitmind/open-images-v7-jpg", help="Destination Hugging Face dataset repository ID (default: 'bitmind/open-images-v7-jpg').")
     parser.add_argument("--token", type=str, required=True, help="Hugging Face token for authentication and pushing to the repository.")
     
