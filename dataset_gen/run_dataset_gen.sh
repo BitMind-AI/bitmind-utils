@@ -3,15 +3,16 @@
 # Example usage: ./run_dataset_generation.sh key_here
 
 # Dataset and model configuration
-REAL_DATASET='MS-COCO-unique'
-DIFFUSION_MODEL='stabilityai/stable-diffusion-xl-base-1.0'
+REAL_DATASET='google-image-scraper'
+DIFFUSION_MODEL='black-forest-labs/FLUX.1-dev'
+LORA_WEIGHTS='Jovie/Midjourney'  # Optional: comment out if not using specific LoRA weights
 
 # Total indices range
-START_INDEX=37630
-END_INDEX=75260
+START_INDEX=0
+END_INDEX=1000
 
 # Number of GPUs
-NUM_GPUS=10
+NUM_GPUS=1
 
 # Hugging Face API Token
 if [ -z "$1" ]; then
@@ -33,16 +34,24 @@ for (( i=0; i<$NUM_GPUS; i++ )); do
         gpu_end_index=$(( gpu_start_index + RANGE_PER_GPU - 1 ))
     fi
 
-    # Run the command with calculated indices
-    pm2 start generate_synthetic_dataset.py --name "$REAL_DATASET $DIFFUSION_MODEL $i" --no-autorestart -- \
+    # Build command with optional LoRA weights
+    CMD="pm2 start generate_synthetic_dataset.py --name \"$REAL_DATASET $DIFFUSION_MODEL $i\" --no-autorestart -- \
         --hf_org 'bitmind' \
-        --real_image_dataset_name "$REAL_DATASET" \
-        --diffusion_model "$DIFFUSION_MODEL" \
+        --real_image_dataset_name \"$REAL_DATASET\" \
+        --diffusion_model \"$DIFFUSION_MODEL\" \
         --download_annotations \
         --generate_synthetic_images \
         --upload_synthetic_images \
-        --hf_token "$HF_TOKEN" \
+        --hf_token \"$HF_TOKEN\" \
         --start_index $gpu_start_index \
         --end_index $gpu_end_index \
-        --gpu_id $i
+        --gpu_id $i"
+
+    # Add LoRA weights if specified
+    if [ ! -z "$LORA_WEIGHTS" ]; then
+        CMD="$CMD --lora_weights '$LORA_WEIGHTS'"
+    fi
+
+    # Execute the command
+    eval $CMD
 done

@@ -60,7 +60,7 @@ def parse_arguments():
     Arguments:
     --hf_org (str): Required. Hugging Face organization name.
     --real_image_dataset_name (str): Required. Name of the real image dataset.
-    --diffusion_model (str): Required. Diffusion model to use for image generation.
+    --diffusion_model (str): Required. Diffusion model to use for image generation. For LoRA models, use format "base_model:::lora_weights"
     --upload_annotations (bool): Optional. Flag to upload annotations to Hugging Face.
     --download_annotations (bool): Optional. Flag to download existing annotations from Hugging Face.
     --skip_generate_annotations (bool): Optional. Flag to skip local annotation generation.
@@ -76,7 +76,7 @@ def parse_arguments():
     parser.add_argument('--hf_org', type=str, required=True, help='Hugging Face org name.')
     parser.add_argument('--real_image_dataset_name', type=str, required=True, help='Real image dataset name.')
     parser.add_argument('--diffusion_model', type=str, required=True, 
-                        help='Diffusion model to use for image generation.')
+                        help='Diffusion model to use for image generation. For LoRA models, use format "base_model:::lora_weights"')
     parser.add_argument('--upload_annotations', action='store_true', default=False, 
                         help='Upload annotations to Hugging Face.')
     parser.add_argument('--download_annotations', action='store_true', default=False, 
@@ -93,6 +93,8 @@ def parse_arguments():
     parser.add_argument('--gpu_id', type=int, default=0, required=True, help='Which GPU to use (check nvidia-smi -L).')
     parser.add_argument('--no-resize', action='store_false', dest='resize', help='Do not resize to target image size from BitMind constants.')
     parser.add_argument('--resize_existing', action='store_true', default=False, required=False, help='Resize existing image files.')
+    parser.add_argument('--lora_weights', type=str, default=None, 
+                       help='Optional LoRA weights path (e.g., "Jovie/Midjourney")')
     return parser.parse_args()
 
 
@@ -196,10 +198,15 @@ def generate_and_save_synthetic_images(annotations_dir, synthetic_image_generato
 
 def main():
     args = parse_arguments()
+    
+    # Build model name for output path
+    model_name = args.diffusion_model.split('/')[-1]
+    if args.lora_weights:
+        model_name += '_' + args.lora_weights.split('/')[-1]
+    
     hf_dataset_name = f"{args.hf_org}/{args.real_image_dataset_name}"
     data_range = f"{args.start_index}-to-{args.end_index}"
     hf_annotations_name = f"{hf_dataset_name}___annotations"
-    model_name = args.diffusion_model.split('/')[-1]
     hf_synthetic_images_name = f"{hf_dataset_name}___{data_range}___{model_name}"
     annotations_dir = f'test_data/annotations/{args.real_image_dataset_name}'
     annotations_chunk_dir = Path(f"{annotations_dir}/{args.start_index}_{args.end_index}/")
@@ -215,9 +222,12 @@ def main():
     synthetic_image_generator = None
     # Generate or download annotations to local storage.
     if args.download_annotations and dataset_exists_on_hf(hf_annotations_name, args.hf_token):
-        synthetic_image_generator = SyntheticImageGenerator(prompt_type='none',
-                                                    use_random_diffuser=False,
-                                                    diffuser_name=args.diffusion_model)
+        synthetic_image_generator = SyntheticImageGenerator(
+            prompt_type='none',
+            use_random_diffuser=False,
+            diffuser_name=args.diffusion_model,
+            lora_weights=args.lora_weights
+        )
         print("Annotations exist on Hugging Face.")
         # Check if the annotations are already saved locally
         
@@ -240,9 +250,12 @@ def main():
         else:
             print("Annotations already saved to disk.")
     elif not args.skip_generate_annotations:
-        synthetic_image_generator = SyntheticImageGenerator(prompt_type='annotation',
-                                            use_random_diffuser=False,
-                                            diffuser_name=args.diffusion_model)
+        synthetic_image_generator = SyntheticImageGenerator(
+            prompt_type='annotation',
+            use_random_diffuser=False,
+            diffuser_name=args.diffusion_model,
+            lora_weights=args.lora_weights
+        )
         synthetic_image_generator.image_annotation_generator.load_models()
         print("Generating new annotations.")
         all_images = ImageDataset(hf_dataset_name, 'train')
