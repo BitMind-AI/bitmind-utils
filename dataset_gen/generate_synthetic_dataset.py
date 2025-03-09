@@ -19,7 +19,7 @@ from datasets import load_dataset
 from synthetic_data_generator import SyntheticDataGenerator
 from prompt_generator import PromptGenerator
 from base_miner.datasets import ImageDataset
-from bitmind.validator.config import TARGET_IMAGE_SIZE
+from bitmind.validator.config import TARGET_IMAGE_SIZE, IMAGE_ANNOTATION_MODEL, TEXT_MODERATION_MODEL
 from utils.hugging_face_utils import (
     dataset_exists_on_hf, load_and_sort_dataset, upload_to_huggingface, 
     slice_dataset, save_as_json
@@ -237,8 +237,8 @@ def main():
     
     # Initialize the generators
     prompt_generator = PromptGenerator(
-        vlm_name="Salesforce/blip2-opt-2.7b",  # Use appropriate model names
-        llm_name="meta-llama/Llama-2-7b-chat-hf"
+        vlm_name=IMAGE_ANNOTATION_MODEL
+        llm_name=TEXT_MODERATION_MODEL
     )
     
     synthetic_image_generator = None
