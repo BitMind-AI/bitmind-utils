@@ -19,7 +19,7 @@ from datasets import load_dataset
 from synthetic_data_generator import SyntheticDataGenerator
 from prompt_generator import PromptGenerator
 from base_miner.datasets import ImageDataset
-from bitmind.validator.config import TARGET_IMAGE_SIZE
+from bitmind.constants import TARGET_IMAGE_SIZE
 from utils.hugging_face_utils import (
     dataset_exists_on_hf, load_and_sort_dataset, upload_to_huggingface, 
     slice_dataset, save_as_json
@@ -90,8 +90,7 @@ def parse_arguments():
                         help='Upload synthetic images to Hugging Face.')
     parser.add_argument('--hf_token', type=str, default=None, help='Token for uploading to Hugging Face.')
     parser.add_argument('--start_index', type=int, default=0, required=True, help='Start index for processing the dataset. Default to the first index.')
-    parser.add_argument('--end_index', type=int, default=None, required=True, help='End index for processing the dataset. Default to the last index.')
-    parser.add_argument('--gpu_id', type=int, default=0, required=True, help='Which GPU to use (check nvidia-smi -L).')
+    parser.add_argument('--end_index', type=int, default=None, help='End index for processing the dataset. Default to the last index (dataset size - 1).')    parser.add_argument('--gpu_id', type=int, default=0, required=True, help='Which GPU to use (check nvidia-smi -L).')
     parser.add_argument('--no-resize', action='store_false', dest='resize', help='Do not resize to target image size from BitMind constants.')
     parser.add_argument('--resize_existing', action='store_true', default=False, required=False, help='Resize existing image files.')
     return parser.parse_args()
@@ -208,6 +207,18 @@ def generate_and_save_synthetic_images(annotations_dir, synthetic_data_generator
 def main():
     args = parse_arguments()
     hf_dataset_name = f"{args.hf_org}/{args.real_image_dataset_name}"
+    
+    # Load the dataset first to determine its size
+    print(f"Loading dataset {hf_dataset_name} to determine size...")
+    all_images = ImageDataset(huggingface_dataset_path=hf_dataset_name, huggingface_dataset_split='train')
+    dataset_size = len(all_images.dataset)
+    print(f"Dataset size: {dataset_size} images")
+    
+    # Adjust end_index if it exceeds dataset size
+    if args.end_index is None or args.end_index >= dataset_size:
+        args.end_index = dataset_size - 1
+        print(f"Adjusted end_index to {args.end_index} (dataset size - 1)")
+    
     data_range = f"{args.start_index}-to-{args.end_index}"
     hf_annotations_name = f"{hf_dataset_name}___annotations"
     model_name = args.diffusion_model.split('/')[-1]
