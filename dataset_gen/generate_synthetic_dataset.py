@@ -16,7 +16,8 @@ logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %
 
 from datasets import load_dataset
 
-from synthetic_image_generator import SyntheticImageGenerator
+from synthetic_data_generator import SyntheticDataGenerator
+from prompt_generator import PromptGenerator
 from bitmind.image_dataset import ImageDataset
 from bitmind.constants import TARGET_IMAGE_SIZE
 from utils.hugging_face_utils import (
@@ -99,7 +100,7 @@ def parse_arguments():
 def generate_and_save_annotations(dataset,
                                   start_index,
                                   dataset_name,
-                                  synthetic_image_generator,
+                                  prompt_generator,
                                   annotations_dir,
                                   batch_size=16):
     annotations_batch = []
@@ -110,13 +111,15 @@ def generate_and_save_annotations(dataset,
 
     for index, real_image in enumerate(dataset):
         adjusted_index = index + start_index
-        annotation = synthetic_image_generator.image_annotation_generator.process_image(
-            real_image,
-            dataset_name,
-            adjusted_index,
-            resize=False,
-            verbose=0
-        )[0]
+        
+        # Use the new prompt generator to create annotations
+        prompt_generator.load_models()
+        annotation = {
+            "id": adjusted_index,
+            "dataset": dataset_name,
+            "description": prompt_generator.generate(real_image['image'])
+        }
+        
         annotations_batch.append((adjusted_index, annotation))
 
         if len(annotations_batch) == batch_size or image_count == len(dataset) - 1:
@@ -131,13 +134,13 @@ def generate_and_save_annotations(dataset,
         if image_count % progress_interval == 0 or image_count == len(dataset):
             print(f"Progress: {image_count}/{len(dataset)} annotations generated.")
 
-    synthetic_image_generator.image_annotation_generator.clear_gpu()
+    prompt_generator.clear_gpu()
     duration = time.time() - start_time
     print(f"All {image_count} annotations generated and saved in {duration:.2f} seconds.")
     print(f"Mean annotation generation time: {duration/image_count:.2f} seconds if any.")
 
 
-def save_json_files(json_filenames, annotations_dir, synthetic_image_generator, synthetic_images_dir, resize=True):
+def save_json_files(json_filenames, annotations_dir, synthetic_data_generator, synthetic_images_dir, resize=True):
     total_images = 0
     for json_filename in json_filenames:
         json_path = os.path.join(annotations_dir, json_filename)
@@ -145,17 +148,25 @@ def save_json_files(json_filenames, annotations_dir, synthetic_image_generator, 
             annotation = json.load(file)
         prompt = annotation['description']
         name = annotation['id']
-        synthetic_image = synthetic_image_generator.generate_image(prompt, name=name)
+        
+        # Use the new synthetic data generator to create images
+        result = synthetic_data_generator.generate(prompt=prompt)
+        
         filename = f"{name}.png"
         file_path = os.path.join(synthetic_images_dir, filename)
-        if resize:
-            synthetic_image['image'] = resize_image(synthetic_image['image'], TARGET_IMAGE_SIZE[0], TARGET_IMAGE_SIZE[1])
-        synthetic_image['image'].save(file_path)
-        total_images += 1
+        
+        # Extract the image from the result
+        if 'gen_output' in result and hasattr(result['gen_output'], 'images'):
+            image = result['gen_output'].images[0]
+            if resize:
+                image = resize_image(image, TARGET_IMAGE_SIZE[0], TARGET_IMAGE_SIZE[1])
+            image.save(file_path)
+            total_images += 1
+    
     return total_images
 
 
-def generate_and_save_synthetic_images(annotations_dir, synthetic_image_generator, 
+def generate_and_save_synthetic_images(annotations_dir, synthetic_data_generator, 
                                        synthetic_images_dir, start_index, end_index, 
                                        batch_size=16, resize=True):
     start_time = time.time()
@@ -181,14 +192,14 @@ def generate_and_save_synthetic_images(annotations_dir, synthetic_image_generato
         for i in range(0, total_valid_files, batch_size):
             batch_files = valid_files[i:i+batch_size]
             total_images += save_json_files(batch_files, annotations_dir, 
-                                            synthetic_image_generator, synthetic_images_dir,
+                                            synthetic_data_generator, synthetic_images_dir,
                                             resize)
 
             if i % progress_interval == 0 or total_images >= total_valid_files:
                 print(f"Progress: {total_images}/{total_valid_files} images generated \
                 ({(total_images / total_valid_files) * 100:.2f}%)")
 
-    synthetic_image_generator.clear_gpu()
+    synthetic_data_generator.clear_gpu()
     duration = time.time() - start_time
     print(f"All {total_images} synthetic images generated in {duration:.2f} seconds.")
     print(f"Mean synthetic images generation time: {duration/max(total_images, 1):.2f} seconds.")
@@ -212,12 +223,16 @@ def main():
                 
     batch_size = 16
     
+    # Initialize the generators
+    prompt_generator = PromptGenerator(
+        vlm_name="Salesforce/blip2-opt-2.7b",  # Use appropriate model names
+        llm_name="meta-llama/Llama-2-7b-chat-hf"
+    )
+    
     synthetic_image_generator = None
+    
     # Generate or download annotations to local storage.
     if args.download_annotations and dataset_exists_on_hf(hf_annotations_name, args.hf_token):
-        synthetic_image_generator = SyntheticImageGenerator(prompt_type='none',
-                                                    use_random_diffuser=False,
-                                                    diffuser_name=args.diffusion_model)
         print("Annotations exist on Hugging Face.")
         # Check if the annotations are already saved locally
         
@@ -240,10 +255,6 @@ def main():
         else:
             print("Annotations already saved to disk.")
     elif not args.skip_generate_annotations:
-        synthetic_image_generator = SyntheticImageGenerator(prompt_type='annotation',
-                                            use_random_diffuser=False,
-                                            diffuser_name=args.diffusion_model)
-        synthetic_image_generator.image_annotation_generator.load_models()
         print("Generating new annotations.")
         all_images = ImageDataset(hf_dataset_name, 'train')
         images_chunk = slice_dataset(all_images.dataset, start_index=args.start_index, end_index=args.end_index)
@@ -251,10 +262,10 @@ def main():
         generate_and_save_annotations(images_chunk,
                                       args.start_index,
                                       hf_dataset_name,
-                                      synthetic_image_generator,
+                                      prompt_generator,
                                       annotations_chunk_dir,
                                       batch_size=batch_size)
-        synthetic_image_generator.image_annotation_generator.clear_gpu()
+        prompt_generator.clear_gpu()
         images_chunk = None # Free up memory
         
     # Upload to Hugging Face
@@ -269,16 +280,21 @@ def main():
 
     # Generate synthetic images to local storage.
     if args.generate_synthetic_images:
-        if synthetic_image_generator.image_annotation_generator:
-            synthetic_image_generator.image_annotation_generator.clear_gpu()
-        synthetic_image_generator.load_diffuser(diffuser_name=args.diffusion_model, gpu_id=args.gpu_id)
+        # Initialize the synthetic data generator with the specified diffusion model
+        synthetic_data_generator = SyntheticDataGenerator(
+            model_name=args.diffusion_model,
+            use_random_model=False,
+            prompt_type='none',  # We'll provide prompts directly
+            device=f'cuda:{args.gpu_id}'
+        )
+        
         synthetic_images_chunk_dir.mkdir(parents=True, exist_ok=True)
         print(f"Generating and saving images to {synthetic_images_chunk_dir}.")
-        generate_and_save_synthetic_images(annotations_chunk_dir, synthetic_image_generator,
+        generate_and_save_synthetic_images(annotations_chunk_dir, synthetic_data_generator,
                                            synthetic_images_chunk_dir, args.start_index, args.end_index,
                                            batch_size=batch_size, resize=args.resize)
     
-        synthetic_image_generator.clear_gpu()
+        synthetic_data_generator.clear_gpu()
     
     if args.resize_existing:
         print(f"Resizing images in {synthetic_images_chunk_dir}.")
