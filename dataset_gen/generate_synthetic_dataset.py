@@ -18,7 +18,7 @@ from datasets import load_dataset
 
 from synthetic_data_generator import SyntheticDataGenerator
 from prompt_generator import PromptGenerator
-from bitmind.image_dataset import ImageDataset
+from base_miner.datasets import ImageDataset
 from bitmind.constants import TARGET_IMAGE_SIZE
 from utils.hugging_face_utils import (
     dataset_exists_on_hf, load_and_sort_dataset, upload_to_huggingface, 
