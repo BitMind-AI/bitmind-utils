@@ -243,8 +243,8 @@ def main():
     
     # Initialize the generators
     prompt_generator = PromptGenerator(
-        vlm_name=IMAGE_ANNOTATION_MODEL
-        llm_name=TEXT_MODERATION_MODEL
+        vlm_name=IMAGE_ANNOTATION_MODEL,
+        llm_name=TEXT_MODERATION_MODEL,
         device=f'cuda:{args.gpu_id}'  # Use the specified GPU
     )
     
