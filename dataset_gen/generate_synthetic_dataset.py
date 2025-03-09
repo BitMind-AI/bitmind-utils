@@ -24,6 +24,7 @@ from utils.hugging_face_utils import (
     dataset_exists_on_hf, load_and_sort_dataset, upload_to_huggingface, 
     slice_dataset, save_as_json
 )
+from utils.batch_prompt_utils import batch_process_dataset
 from utils.image_utils import resize_image, resize_images_in_directory
 
 PROGRESS_INCREMENT = 10
@@ -278,12 +279,17 @@ def main():
         all_images = ImageDataset(hf_dataset_name, 'train')
         images_chunk = slice_dataset(all_images.dataset, start_index=args.start_index, end_index=args.end_index)
         all_images = None
-        generate_and_save_annotations(images_chunk,
-                                      args.start_index,
-                                      hf_dataset_name,
-                                      prompt_generator,
-                                      annotations_chunk_dir,
-                                      batch_size=batch_size)
+        
+        # Use the batch processing utility instead of the old function
+        batch_process_dataset(
+            images_chunk,
+            args.start_index,
+            hf_dataset_name,
+            prompt_generator,
+            annotations_chunk_dir,
+            batch_size=batch_size
+        )
+        
         prompt_generator.clear_gpu()
         images_chunk = None # Free up memory
         
