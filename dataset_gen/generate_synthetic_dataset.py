@@ -109,32 +109,38 @@ def generate_and_save_annotations(dataset,
     # Update progress every PROGRESS_INCREMENT % of image chunk
     progress_interval = (batch_size * ceil(len(dataset) / (PROGRESS_INCREMENT * batch_size)))
 
-    for index, real_image in enumerate(dataset):
-        adjusted_index = index + start_index
+    # Load models ONCE before the loop
+    print("Loading models for annotation generation...")
+    prompt_generator.load_models()
+    
+    try:
+        for index, real_image in enumerate(dataset):
+            adjusted_index = index + start_index
+            
+            # Generate annotation without reloading models
+            annotation = {
+                "id": adjusted_index,
+                "dataset": dataset_name,
+                "description": prompt_generator.generate(real_image['image'])
+            }
+            
+            annotations_batch.append((adjusted_index, annotation))
+
+            if len(annotations_batch) == batch_size or image_count == len(dataset) - 1:
+                for image_id, annotation in annotations_batch:
+                    file_path = os.path.join(annotations_dir, f"{image_id}.json")
+                    with open(file_path, 'w') as f:
+                        json.dump(annotation, f)
+                annotations_batch = []
+
+            image_count += 1
+
+            if image_count % progress_interval == 0 or image_count == len(dataset):
+                print(f"Progress: {image_count}/{len(dataset)} annotations generated.")
+    finally:
+        # Ensure models are cleared even if an error occurs
+        prompt_generator.clear_gpu()
         
-        # Use the new prompt generator to create annotations
-        prompt_generator.load_models()
-        annotation = {
-            "id": adjusted_index,
-            "dataset": dataset_name,
-            "description": prompt_generator.generate(real_image['image'])
-        }
-        
-        annotations_batch.append((adjusted_index, annotation))
-
-        if len(annotations_batch) == batch_size or image_count == len(dataset) - 1:
-            for image_id, annotation in annotations_batch:
-                file_path = os.path.join(annotations_dir, f"{image_id}.json")
-                with open(file_path, 'w') as f:
-                    json.dump(annotation, f)
-            annotations_batch = []
-
-        image_count += 1
-
-        if image_count % progress_interval == 0 or image_count == len(dataset):
-            print(f"Progress: {image_count}/{len(dataset)} annotations generated.")
-
-    prompt_generator.clear_gpu()
     duration = time.time() - start_time
     print(f"All {image_count} annotations generated and saved in {duration:.2f} seconds.")
     print(f"Mean annotation generation time: {duration/image_count:.2f} seconds if any.")
@@ -239,6 +245,7 @@ def main():
     prompt_generator = PromptGenerator(
         vlm_name=IMAGE_ANNOTATION_MODEL
         llm_name=TEXT_MODERATION_MODEL
+        device=f'cuda:{args.gpu_id}'  # Use the specified GPU
     )
     
     synthetic_image_generator = None
