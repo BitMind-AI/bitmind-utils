@@ -157,7 +157,11 @@ def save_json_files(json_filenames, annotations_dir, synthetic_data_generator, s
         name = annotation['id']
         
         # Use the new synthetic data generator to create images
-        result = synthetic_data_generator.generate(prompt=prompt)
+        result = synthetic_data_generator.generate_from_prompt(
+            prompt=prompt,
+            task='t2i',  # Explicitly specify text-to-image task
+            generate_at_target_size=False  # Use resize parameter to control target size
+        )
         
         filename = f"{name}.png"
         file_path = os.path.join(synthetic_images_dir, filename)
