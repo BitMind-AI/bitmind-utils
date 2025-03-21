@@ -148,6 +148,10 @@ T2I_MODELS: Dict[str, Dict[str, Any]] = {
             "torch_dtype": torch.bfloat16,
         },
         "lora_model_id": "strangerzonehf/Flux-Midjourney-Mix2-LoRA",
+        "lora_loading_args": {
+            "use_peft_backend": True,
+            "weight_name": "pytorch_lora_weights.safetensors"
+        },
         "generate_args": {
             "guidance_scale": 2,
             "num_inference_steps": {"min": 50, "max": 125},
