@@ -462,6 +462,11 @@ class SyntheticDataGenerator:
                 **pipeline_args,
                 add_watermarker=False
             )
+            
+            # Load LoRA weights if specified
+            if 'lora_model_id' in model_config:
+                bt.logging.info(f"Loading LoRA weights from {model_config['lora_model_id']}")
+                self.model.load_lora_weights(model_config['lora_model_id'])
 
             # Load scheduler if specified
             if 'scheduler' in model_config:

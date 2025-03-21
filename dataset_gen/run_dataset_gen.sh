@@ -10,7 +10,11 @@ fi
 HF_TOKEN=$1
 
 # Diffusion model to use
-DIFFUSION_MODEL='stabilityai/stable-diffusion-xl-base-1.0'
+if [ -z "$2" ]; then
+    DIFFUSION_MODEL='stabilityai/stable-diffusion-xl-base-1.0'
+else
+    DIFFUSION_MODEL=$2
+fi
 
 # Define the datasets to process
 DATASETS=(
