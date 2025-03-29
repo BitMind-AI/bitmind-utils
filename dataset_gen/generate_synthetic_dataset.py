@@ -25,7 +25,9 @@ from base_miner.datasets import ImageDataset
 from bitmind.validator.config import (
     TARGET_IMAGE_SIZE,
     IMAGE_ANNOTATION_MODEL,
-    TEXT_MODERATION_MODEL
+    TEXT_MODERATION_MODEL,
+    get_task,
+    get_modality
 )
 from utils.hugging_face_utils import (
     dataset_exists_on_hf,
@@ -186,8 +188,16 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def download_real_images(dataset, start_index, end_index, output_dir):
-    """Download real images from the dataset for the specified index range."""
+def download_real_images(dataset, start_index, end_index, output_dir, resize=True):
+    """Download and optionally resize real images from the dataset.
+    
+    Args:
+        dataset: The source dataset containing images
+        start_index: Starting index for processing
+        end_index: Ending index for processing
+        output_dir: Directory to save the images
+        resize: Whether to resize images to TARGET_IMAGE_SIZE
+    """
     os.makedirs(output_dir, exist_ok=True)
     total_downloaded = 0
 
@@ -199,29 +209,46 @@ def download_real_images(dataset, start_index, end_index, output_dir):
             print(f"No image found in item {start_index + idx}")
             continue
 
-        image = item['image']
-        if isinstance(image, str):  # If image is a path/url
-            try:
-                image = Image.open(requests.get(image, stream=True).raw)
-            except Exception as e:
-                print(f"Failed to load image at index {start_index + idx}: {e}")
-                continue
-        elif not isinstance(image, Image.Image):
-            try:
-                image = Image.fromarray(image)
-            except Exception as e:
-                print(f"Failed to convert image at index {start_index + idx}: {e}")
-                continue
+        try:
+            image = item['image']
+            if isinstance(image, str):  # If image is a path/url
+                try:
+                    image = Image.open(requests.get(image, stream=True).raw)
+                except Exception as e:
+                    print(f"Failed to load image at index {start_index + idx}: {e}")
+                    continue
+            elif not isinstance(image, Image.Image):
+                try:
+                    image = Image.fromarray(image)
+                except Exception as e:
+                    print(f"Failed to convert image at index {start_index + idx}: {e}")
+                    continue
 
-        # Save the image
-        image_path = os.path.join(output_dir, f"{start_index + idx}.png")
-        image.save(image_path)
-        total_downloaded += 1
+            # Convert to RGB if necessary
+            if image.mode not in ('RGB', 'L'):
+                image = image.convert('RGB')
 
-        if total_downloaded % 100 == 0:
-            print(f"Downloaded {total_downloaded} images")
+            # Resize if requested
+            if resize:
+                image = resize_image(
+                    image,
+                    TARGET_IMAGE_SIZE[0],
+                    TARGET_IMAGE_SIZE[1]
+                )
 
-    print(f"Successfully downloaded {total_downloaded} images")
+            # Save the image
+            image_path = os.path.join(output_dir, f"{start_index + idx}.png")
+            image.save(image_path)
+            total_downloaded += 1
+
+            if total_downloaded % 100 == 0:
+                print(f"Downloaded and processed {total_downloaded} images")
+
+        except Exception as e:
+            print(f"Error processing image at index {start_index + idx}: {e}")
+            continue
+
+    print(f"Successfully downloaded and processed {total_downloaded} images")
     return total_downloaded
 
 
@@ -287,8 +314,10 @@ def save_generated_items(
     annotations_dir,
     synthetic_data_generator,
     output_dir,
+    real_images_dir,
     resize=True
 ):
+    """Save generated items (images or videos) from annotations."""
     total_items = 0
     task = get_task(synthetic_data_generator.model_name)
     modality = get_modality(synthetic_data_generator.model_name)
@@ -300,26 +329,22 @@ def save_generated_items(
         prompt = annotation['description']
         name = annotation['id']
 
-        # Generate based on task type
+        # Handle i2i case by loading source image
+        image = None
         if task == 'i2i':
-            # Load source image for i2i
-            source_image_path = os.path.join(real_image_samples_dir, f"{name}.png")
+            source_image_path = os.path.join(real_images_dir, f"{name}.png")
             if not os.path.exists(source_image_path):
                 print(f"Source image not found for i2i: {source_image_path}")
                 continue
-            source_image = Image.open(source_image_path)
-            result = synthetic_data_generator.generate_from_prompt(
-                prompt=prompt,
-                task=task,
-                image=source_image,
-                generate_at_target_size=False
-            )
-        else:
-            result = synthetic_data_generator.generate_from_prompt(
-                prompt=prompt,
-                task=task,
-                generate_at_target_size=False
-            )
+            image = Image.open(source_image_path)
+
+        # Use generate_from_prompt for all tasks
+        result = synthetic_data_generator.generate_from_prompt(
+            prompt=prompt,
+            task=task,
+            image=image,
+            generate_at_target_size=False
+        )
 
         # Handle different output types
         if modality == 'video':
@@ -345,15 +370,17 @@ def save_generated_items(
     return total_items
 
 
-def generate_and_save_synthetic_images(
+def generate_and_save_synthetic_items(
     annotations_dir,
     synthetic_data_generator,
-    synthetic_images_dir,
+    output_dir,
+    real_images_dir,
     start_index,
     end_index,
     batch_size=16,
     resize=True
 ):
+    """Generate and save synthetic items (images or videos) from annotations."""
     start_time = time.time()
     total_items = 0
 
@@ -379,7 +406,8 @@ def generate_and_save_synthetic_images(
                 batch_files,
                 annotations_dir,
                 synthetic_data_generator,
-                synthetic_images_dir,
+                output_dir,
+                real_images_dir,
                 resize
             )
 
@@ -431,20 +459,21 @@ def main():
 
     task = get_task(args.diffusion_model)
     if task == 't2v':
-        synthetic_images_dir = f'test_data/synthetic_videos/{args.real_image_dataset_name}'
+        synthetic_items_dir = f'test_data/synthetic_videos/{args.real_image_dataset_name}'
     else:
         if task == 'i2i' and args.download_real_images:
-            print(f"Downloading real images for i2i from {hf_dataset_name}")
+            print(f"Downloading and resizing real images for i2i from {hf_dataset_name}")
             download_real_images(
                 all_images.dataset,
                 args.start_index,
                 args.end_index,
-                real_images_chunk_dir
+                real_images_chunk_dir,
+                resize=args.resize
             )
-        synthetic_images_dir = f'test_data/synthetic_images/{args.real_image_dataset_name}'
+        synthetic_items_dir = f'test_data/synthetic_images/{args.real_image_dataset_name}'
 
     synthetic_items_chunk_dir = Path(
-        f'{synthetic_images_dir}/{args.start_index}_{args.end_index}/'
+        f'{synthetic_items_dir}/{args.start_index}_{args.end_index}/'
     )
     os.makedirs(synthetic_items_chunk_dir, exist_ok=True)
 
@@ -536,7 +565,7 @@ def main():
             "seconds."
         )
 
-    # Generate synthetic images to local storage.
+    # Generate synthetic items to local storage.
     if args.generate_synthetic_images:
         # Initialize the synthetic data generator with the specified diffusion model
         synthetic_data_generator = SyntheticDataGenerator(
@@ -546,12 +575,13 @@ def main():
             device=f'cuda:{args.gpu_id}'
         )
 
-        synthetic_images_chunk_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Generating and saving images to {synthetic_images_chunk_dir}.")
-        generate_and_save_synthetic_images(
+        synthetic_items_chunk_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Generating and saving items to {synthetic_items_chunk_dir}.")
+        generate_and_save_synthetic_items(
             annotations_chunk_dir,
             synthetic_data_generator,
-            synthetic_images_chunk_dir,
+            synthetic_items_chunk_dir,
+            real_images_chunk_dir,
             args.start_index,
             args.end_index,
             batch_size=batch_size,
@@ -561,8 +591,8 @@ def main():
         synthetic_data_generator.clear_gpu()
 
     if args.resize_existing:
-        print(f"Resizing images in {synthetic_images_chunk_dir}.")
-        resize_images_in_directory(synthetic_images_chunk_dir)
+        print(f"Resizing images in {synthetic_items_chunk_dir}.")
+        resize_images_in_directory(synthetic_items_chunk_dir)
         hf_synthetic_images_name += f"___{TARGET_IMAGE_SIZE[0]}"
         print(f"Done resizing existing images.")
 
@@ -570,7 +600,7 @@ def main():
         start_time = time.time()
         print("Loading synthetic image dataset.")
         synthetic_image_dataset = load_and_sort_dataset(
-            synthetic_images_chunk_dir,
+            synthetic_items_chunk_dir,
             'image'
         )
         print(

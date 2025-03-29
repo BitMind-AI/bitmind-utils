@@ -355,16 +355,15 @@ class SyntheticDataGenerator:
         self,
         prompt: str,
         task: Optional[str] = None,
-        model_name: Optional[str] = None,
+        image: Optional[Image.Image] = None,
         generate_at_target_size: bool = False
     ) -> Dict[str, Any]:
-        """
-        Generate synthetic data based on a provided prompt.
+        """Generate synthetic data based on a provided prompt.
         
         Args:
             prompt: The text prompt to use for generation
             task: Optional task type ('t2i', 't2v', 'i2i')
-            model_name: Optional model name to use
+            image: Optional input image for i2i generation
             generate_at_target_size: If True, generate at TARGET_IMAGE_SIZE dimensions
             
         Returns:
@@ -377,7 +376,7 @@ class SyntheticDataGenerator:
             task = 't2i'
         
         # If model_name is not specified, select one based on the task
-        if model_name is None and self.use_random_model:
+        if self.model_name is None and self.use_random_model:
             if task == 't2i':
                 model_candidates = T2I_MODEL_NAMES
             elif task == 't2v':
@@ -387,16 +386,13 @@ class SyntheticDataGenerator:
             else:
                 raise ValueError(f"Unsupported task: {task}")
             
-            model_name = random.choice(model_candidates)
-        elif model_name is None:
-            model_name = self.model_name
+            self.model_name = random.choice(model_candidates)
         
         # Run the generation with the provided prompt
         gen_data = self._run_generation(
             prompt=prompt, 
             task=task, 
-            model_name=model_name, 
-            image=None,
+            image=image,
             generate_at_target_size=generate_at_target_size
         )
         
