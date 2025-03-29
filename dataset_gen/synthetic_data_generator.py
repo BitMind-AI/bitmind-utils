@@ -472,12 +472,20 @@ class SyntheticDataGenerator:
 
             # Load scheduler if specified
             if 'scheduler' in model_config:
-                sched_cls = model_config['scheduler']['cls']
-                sched_args = model_config['scheduler']['from_config_args']
-                self.model.scheduler = sched_cls.from_config(
-                    self.model.scheduler.config,
-                    **sched_args
-                )
+                scheduler_config = model_config['scheduler']
+                if 'cls' in scheduler_config:
+                    sched_cls = scheduler_config['cls']
+                    # Only pass args if they exist in config
+                    if 'from_config_args' in scheduler_config:
+                        self.model.scheduler = sched_cls.from_config(
+                            self.model.scheduler.config,
+                            **scheduler_config['from_config_args']
+                        )
+                    else:
+                        # Use default configuration
+                        self.model.scheduler = sched_cls.from_config(
+                            self.model.scheduler.config
+                        )
 
             enable_model_optimizations(
                 model=self.model,
@@ -504,4 +512,3 @@ class SyntheticDataGenerator:
             self.model = None
             gc.collect()
             torch.cuda.empty_cache()
-
