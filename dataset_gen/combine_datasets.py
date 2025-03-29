@@ -9,20 +9,33 @@ def find_dataset_chunks(hf_org, dataset_name, model_name, hf_token):
     """Find all dataset chunks matching the pattern on Hugging Face."""
     print(f"Searching for dataset chunks for {dataset_name}...")
     
-    # Pattern to match dataset chunks like:
-    # bitmind/google-images-holdout-deduped-commits_3___0-to-2346___FLUX.1-dev
-    pattern = f"{hf_org}/{dataset_name}___\\d+-to-\\d+___{model_name}"
+    # Two patterns to match:
+    # Format 1: bitmind/google-images-holdout-deduped-commits_3___0-to-2346___FLUX.1-dev
+    # Format 2: bitmind/stable-diffusion-xl-base-1.0_0to2346
+    pattern1 = f"{hf_org}/{dataset_name}___\\d+-to-\\d+___{model_name}"
+    pattern2 = f"{hf_org}/{model_name}_\\d+to\\d+"
     
     # List all datasets in the organization
     all_datasets = list_datasets(author=hf_org, token=hf_token)
     dataset_ids = [ds.id for ds in all_datasets]
     
-    # Filter datasets matching our pattern
+    # Filter datasets matching our patterns
     matching_datasets = []
     for ds_id in dataset_ids:
-        if re.match(pattern, ds_id):
-            # Extract the indices from the dataset name
+        # Try old format
+        match1 = re.match(pattern1, ds_id)
+        if match1:
             match = re.search(f"{hf_org}/{dataset_name}___(\d+)-to-(\d+)___{model_name}", ds_id)
+            if match:
+                start_idx = int(match.group(1))
+                end_idx = int(match.group(2))
+                matching_datasets.append((start_idx, end_idx, ds_id))
+            continue
+
+        # Try new format
+        match2 = re.match(pattern2, ds_id)
+        if match2:
+            match = re.search(f"{hf_org}/{model_name}_(\d+)to(\d+)", ds_id)
             if match:
                 start_idx = int(match.group(1))
                 end_idx = int(match.group(2))
