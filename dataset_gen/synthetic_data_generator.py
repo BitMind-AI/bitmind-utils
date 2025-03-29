@@ -377,6 +377,7 @@ class SyntheticDataGenerator:
         
         # If model_name is not specified, select one based on the task
         if self.model_name is None and self.use_random_model:
+            bt.logging.warning(f"No model configured. Using random model.")
             if task == 't2i':
                 model_candidates = T2I_MODEL_NAMES
             elif task == 't2v':
@@ -392,6 +393,7 @@ class SyntheticDataGenerator:
         gen_data = self._run_generation(
             prompt=prompt, 
             task=task, 
+            model_name=self.model_name,
             image=image,
             generate_at_target_size=generate_at_target_size
         )
