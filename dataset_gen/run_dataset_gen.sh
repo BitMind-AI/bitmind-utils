@@ -69,6 +69,7 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
             --skip_generate_annotations \
             --generate_synthetic_images \
             --upload_synthetic_images \
+            --download_real_images \
             --hf_token "$HF_TOKEN" \
             --start_index $START_INDEX \
             --end_index $END_INDEX \
