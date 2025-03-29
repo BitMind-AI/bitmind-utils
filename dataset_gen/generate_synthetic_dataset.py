@@ -185,6 +185,11 @@ def parse_arguments():
         default=False,
         help='Download real images for i2i generation.'
     )
+    parser.add_argument(
+        '--output_repo_name',
+        type=str,
+        help='Custom name for the output repository on HuggingFace. If not provided, will use auto-generated name.'
+    )
     return parser.parse_args()
 
 
@@ -440,11 +445,28 @@ def main():
     if args.end_index is None or args.end_index >= dataset_size:
         args.end_index = dataset_size - 1
         print(f"Adjusted end_index to {args.end_index} (dataset size - 1)")
-
-    data_range = f"{args.start_index}-to-{args.end_index}"
-    hf_annotations_name = f"{hf_dataset_name}___annotations"
+        
+    # Create default name using full model name
     model_name = args.diffusion_model.split('/')[-1]
-    hf_synthetic_images_name = f"{hf_dataset_name}___{data_range}___{model_name}"
+    data_range = f"{args.start_index}-to-{args.end_index}"
+    default_name = f"{hf_dataset_name}___{data_range}___{model_name}"
+
+    # Check if default name is too long
+    if len(default_name) > 96 and not args.output_repo_name:
+        raise ValueError(
+            f"Default repository name '{default_name}' exceeds HuggingFace's 96 character limit.\n"
+            f"Please provide a shorter custom name using --output_repo_name.\n"
+            f"Current length: {len(default_name)} characters"
+        )
+
+    # Use custom name if provided, otherwise use default
+    hf_synthetic_images_name = (
+        f"{args.hf_org}/{args.output_repo_name}"
+        if args.output_repo_name
+        else default_name
+    )
+
+    hf_annotations_name = f"{hf_dataset_name}___annotations"
     annotations_dir = f'test_data/annotations/{args.real_image_dataset_name}'
     annotations_chunk_dir = Path(
         f"{annotations_dir}/{args.start_index}_{args.end_index}/"

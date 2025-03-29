@@ -52,10 +52,14 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
             END_INDEX=$(( DATASET_SIZE - 1 ))
         fi
         
+        # Create a shorter custom name for the repository to avoid length issues
+        MODEL_NAME=$(basename "$DIFFUSION_MODEL")
+        CUSTOM_REPO_NAME="${MODEL_NAME}_${START_INDEX}to${END_INDEX}"
         JOB_NAME="${DATASET}_mirror_${gpu_id}"
         JOB_NAMES+=("$JOB_NAME")
         
         echo "GPU $gpu_id: Processing indices $START_INDEX to $END_INDEX"
+        echo "Using custom repository name: $CUSTOM_REPO_NAME"
         
         # Launch the job with PM2
         pm2 start generate_synthetic_dataset.py \
@@ -73,7 +77,8 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
             --hf_token "$HF_TOKEN" \
             --start_index $START_INDEX \
             --end_index $END_INDEX \
-            --gpu_id $gpu_id
+            --gpu_id $gpu_id \
+            --output_repo_name "$CUSTOM_REPO_NAME"
             
         # Add a small delay to prevent overwhelming the system
         sleep 2
