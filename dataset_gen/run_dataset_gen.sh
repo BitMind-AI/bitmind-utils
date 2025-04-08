@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Example usage: ./run_dataset_gen.sh your_hf_token
+# Example usage: ./run_dataset_gen_host3.sh your_hf_token
 
 # Check for Hugging Face API Token
 if [ -z "$1" ]; then
@@ -23,8 +23,10 @@ DATASETS=(
     #"google-images-holdout-deduped-commits_5"
 )
 
-# Number of GPUs available
-NUM_GPUS=10  # Adjust based on your system
+# Number of GPUs available on this host
+NUM_GPUS=1
+START_GPU=0
+END_GPU=0
 
 # Process each dataset sequentially
 for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
@@ -36,15 +38,17 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
     DATASET_SIZE=$(python -c "from datasets import load_dataset; print(len(load_dataset('bitmind/${DATASET}___annotations', split='train')))")
     echo "Dataset size: $DATASET_SIZE"
     
-    # Calculate indices per GPU
-    INDICES_PER_GPU=$(( ($DATASET_SIZE + $NUM_GPUS - 1) / $NUM_GPUS ))
+    # Calculate indices per GPU (across all 30 GPUs)
+    TOTAL_GPUS=30
+    INDICES_PER_GPU=$(( ($DATASET_SIZE + $TOTAL_GPUS - 1) / $TOTAL_GPUS ))
     
     # Array to store job names for waiting
     declare -a JOB_NAMES=()
     
-    # Launch jobs for each GPU
-    for ((gpu_id=0; gpu_id<$NUM_GPUS; gpu_id++)); do
-        START_INDEX=$(( gpu_id * INDICES_PER_GPU ))
+    # Launch jobs for each GPU on this host
+    for ((local_gpu=0; local_gpu<$NUM_GPUS; local_gpu++)); do
+        global_gpu=$(( local_gpu + START_GPU ))
+        START_INDEX=$(( global_gpu * INDICES_PER_GPU ))
         END_INDEX=$(( START_INDEX + INDICES_PER_GPU - 1 ))
         
         # Ensure END_INDEX doesn't exceed dataset size
@@ -55,10 +59,10 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
         # Create a shorter custom name for the repository to avoid length issues
         MODEL_NAME=$(basename "$DIFFUSION_MODEL")
         CUSTOM_REPO_NAME="${MODEL_NAME}_${START_INDEX}to${END_INDEX}"
-        JOB_NAME="${DATASET}_mirror_${gpu_id}"
+        JOB_NAME="${DATASET}_mirror_${global_gpu}"
         JOB_NAMES+=("$JOB_NAME")
         
-        echo "GPU $gpu_id: Processing indices $START_INDEX to $END_INDEX"
+        echo "Local GPU $local_gpu (Global GPU $global_gpu): Processing indices $START_INDEX to $END_INDEX"
         echo "Using custom repository name: $CUSTOM_REPO_NAME"
         
         # Launch the job with PM2
@@ -77,7 +81,7 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
             --hf_token "$HF_TOKEN" \
             --start_index $START_INDEX \
             --end_index $END_INDEX \
-            --gpu_id $gpu_id \
+            --gpu_id $local_gpu \
             --output_repo_name "$CUSTOM_REPO_NAME"
             
         # Add a small delay to prevent overwhelming the system
@@ -91,7 +95,6 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
     for job in "${JOB_NAMES[@]}"; do
         echo "Waiting for job $job to complete..."
         
-        # Replace with this polling approach:
         while pm2 show "$job" | grep -q "online"; do
             echo "Job $job is still running... waiting"
             sleep 30  # Check every 30 seconds

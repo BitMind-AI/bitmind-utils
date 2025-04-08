@@ -334,12 +334,12 @@ def save_generated_items(
         prompt = annotation['description']
         name = annotation['id']
 
-        # Handle i2i case by loading source image
+        # Handle i2i and i2v cases by loading source image
         image = None
-        if task == 'i2i':
+        if task in ['i2i', 'i2v']:
             source_image_path = os.path.join(real_images_dir, f"{name}.png")
             if not os.path.exists(source_image_path):
-                print(f"Source image not found for i2i: {source_image_path}")
+                print(f"Source image not found for {task}: {source_image_path}")
                 continue
             image = Image.open(source_image_path)
 
@@ -483,8 +483,8 @@ def main():
     if task == 't2v':
         synthetic_items_dir = f'test_data/synthetic_videos/{args.real_image_dataset_name}'
     else:
-        if task == 'i2i' and args.download_real_images:
-            print(f"Downloading and resizing real images for i2i from {hf_dataset_name}")
+        if (task in ['i2i', 'i2v']) and args.download_real_images:
+            print(f"Downloading and resizing real images for {task} from {hf_dataset_name}")
             download_real_images(
                 all_images.dataset,
                 args.start_index,
