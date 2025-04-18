@@ -9,9 +9,12 @@ if [ -z "$1" ]; then
 fi
 HF_TOKEN=$1
 
+# Set PyTorch memory allocation settings
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 # Diffusion model to use
 if [ -z "$2" ]; then
-    DIFFUSION_MODEL='stabilityai/stable-diffusion-xl-base-1.0'
+    DIFFUSION_MODEL='THUDM/CogVideoX1.5-5B-I2V'
 else
     DIFFUSION_MODEL=$2
 fi

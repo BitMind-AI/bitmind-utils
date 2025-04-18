@@ -27,7 +27,8 @@ from bitmind.validator.config import (
     IMAGE_ANNOTATION_MODEL,
     TEXT_MODERATION_MODEL,
     get_task,
-    get_modality
+    get_modality,
+    MODELS
 )
 from utils.hugging_face_utils import (
     dataset_exists_on_hf,
@@ -38,6 +39,7 @@ from utils.hugging_face_utils import (
 )
 from utils.batch_prompt_utils import batch_process_dataset
 from utils.image_utils import resize_image, resize_images_in_directory
+from diffusers.utils import export_to_video
 
 PROGRESS_INCREMENT = 10
 
@@ -326,6 +328,8 @@ def save_generated_items(
     total_items = 0
     task = get_task(synthetic_data_generator.model_name)
     modality = get_modality(synthetic_data_generator.model_name)
+    
+    model_config = MODELS.get(synthetic_data_generator.model_name, {})
 
     for json_filename in json_filenames:
         json_path = os.path.join(annotations_dir, json_filename)
@@ -356,7 +360,10 @@ def save_generated_items(
             filename = f"{name}.mp4"
             file_path = os.path.join(output_dir, filename)
             if 'gen_output' in result and hasattr(result['gen_output'], 'frames'):
-                export_to_video(result['gen_output'].frames[0], file_path, fps=30)
+                # Get fps from model config, default to 8 if not specified
+                fps = model_config.get('save_args', {}).get('fps', 8)
+                print(f"Saving video with {fps} fps based on model configuration")
+                export_to_video(result['gen_output'].frames[0], file_path, fps=fps)
                 total_items += 1
         else:  # image output
             filename = f"{name}.png"
