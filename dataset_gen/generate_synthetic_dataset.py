@@ -90,6 +90,9 @@ def parse_arguments():
         --no-resize (bool): Optional. Do not resize to target image size from BitMind constants.
         --resize_existing (bool): Optional. Resize existing image files.
         --download_real_images (bool): Optional. Download real images for i2i generation.
+        --target_org (str): Optional. Target Hugging Face org for uploading annotations (default: same as --hf_org)
+        --private (bool): Optional. Upload the dataset as private
+        --max_images (int): Optional. Maximum number of images to annotate per dataset.
     """
     parser = argparse.ArgumentParser(
         description='Generate synthetic images and annotations from a real dataset.'
@@ -192,6 +195,31 @@ def parse_arguments():
         type=str,
         help='Custom name for the output repository on HuggingFace. If not provided, will use auto-generated name.'
     )
+    parser.add_argument(
+        '--target_org',
+        type=str,
+        required=False,
+        help='Target Hugging Face org for uploading annotations (default: same as --hf_org)'
+    )
+    parser.add_argument(
+        '--private',
+        action='store_true',
+        default=False,
+        help='Upload the dataset as private'
+    )
+    parser.add_argument(
+        '--annotation_task',
+        type=str,
+        default='t2i',
+        choices=['t2i', 'i2i', 't2v', 'i2v'],
+        help='Which annotation prompt type to generate (t2i/i2i: non-enhanced, t2v/i2v: enhanced)'
+    )
+    parser.add_argument(
+        '--max_images',
+        type=int,
+        default=None,
+        help='Maximum number of images to annotate per dataset.'
+    )
     return parser.parse_args()
 
 
@@ -287,7 +315,7 @@ def generate_and_save_annotations(
             annotation = {
                 "id": adjusted_index,
                 "dataset": dataset_name,
-                "description": prompt_generator.generate(real_image['image'])
+                "description": prompt_generator.generate(real_image['image'], task=args.annotation_task)
             }
 
             annotations_batch.append((adjusted_index, annotation))
@@ -448,8 +476,13 @@ def main():
     dataset_size = len(all_images.dataset)
     print(f"Dataset size: {dataset_size} images")
 
-    # Adjust end_index if it exceeds dataset size
-    if args.end_index is None or args.end_index >= dataset_size:
+    # Set end_index based on max_images if provided
+    if args.max_images is not None:
+        args.end_index = args.start_index + args.max_images - 1
+        if args.end_index >= dataset_size:
+            args.end_index = dataset_size - 1
+            print(f"Adjusted end_index to {args.end_index} (dataset size - 1)")
+    elif args.end_index is None or args.end_index >= dataset_size:
         args.end_index = dataset_size - 1
         print(f"Adjusted end_index to {args.end_index} (dataset size - 1)")
         
@@ -473,7 +506,9 @@ def main():
         else default_name
     )
 
-    hf_annotations_name = f"{hf_dataset_name}___annotations"
+    # Use target_org if provided, else default to hf_org
+    target_org = args.target_org if hasattr(args, 'target_org') and args.target_org else args.hf_org
+    hf_annotations_name = f"{target_org}/{args.real_image_dataset_name}___annotations"
     annotations_dir = f'test_data/annotations/{args.real_image_dataset_name}'
     annotations_chunk_dir = Path(
         f"{annotations_dir}/{args.start_index}_{args.end_index}/"
@@ -506,7 +541,7 @@ def main():
     )
     os.makedirs(synthetic_items_chunk_dir, exist_ok=True)
 
-    batch_size = 16
+    batch_size = 32
     # Initialize the generators
     prompt_generator = PromptGenerator(
         vlm_name=IMAGE_ANNOTATION_MODEL,
@@ -587,7 +622,8 @@ def main():
         upload_to_huggingface(
             annotations_dataset,
             hf_annotations_name,
-            args.hf_token
+            args.hf_token,
+            private=args.private
         )
         print(
             f"Annotations uploaded to Hugging Face in {time.time() - start_time:.2f} "

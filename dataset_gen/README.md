@@ -13,14 +13,14 @@ cd bitmind-subnet
 2. **File Integration**
 ```bash
 # Copy files from dataset_gen to synthetic_data_generation
-cp -r /path/to/bitmind-utils/dataset_gen/* /path/to/bitmind-subnet/bitmind/synthetic_data_generation/
+cp -rn /path/to/bitmind-utils/dataset_gen/* /path/to/bitmind-subnet/bitmind/synthetic_data_generation/
 
 # Copy utils directory to bitmind/
-cp -r /path/to/bitmind-utils/utils /path/to/bitmind-subnet/bitmind/
+cp -rn /path/to/bitmind-utils/utils /path/to/bitmind-subnet/bitmind/
 ```
 
 3. **Update Synthetic Data Generator**
-- Add the `generate_from_prompt` function from `synthetic_data_generator.py` to BitMind subnet's synthetic data generator.
+- Add the `generate_from_prompt` function from `generate_from_prompt.py` to BitMind subnet's synthetic data generator.
 
 4. **Reinstall Requirements**
 ```bash

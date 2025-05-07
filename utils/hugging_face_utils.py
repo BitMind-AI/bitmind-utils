@@ -48,11 +48,13 @@ def load_and_sort_dataset(data_dir, file_type):
         print(f"Error loading dataset: {e}")
         return None
     
-def upload_to_huggingface(dataset, repo_name, token):
+def upload_to_huggingface(dataset, repo_name, token, private=False):
     """Uploads the dataset dictionary to Hugging Face."""
     api = HfApi()
-    api.create_repo(repo_name, repo_type="dataset", private=False, token=token)
-    dataset.push_to_hub(repo_name)
+    # Create the repo if it doesn't exist, or continue if it does
+    api.create_repo(repo_name, repo_type="dataset", token=token, private=private, exist_ok=True)
+    # Push the dataset, always pass the token for private repos
+    dataset.push_to_hub(repo_name, token=token)
 
 def slice_dataset(dataset, start_index=0, end_index=None):
     """

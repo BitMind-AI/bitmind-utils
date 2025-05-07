@@ -1,9 +1,22 @@
 #!/bin/bash
 
 # Configuration
-DATASET_BASE="google-images-holdout-deduped-commits"
-TOTAL_CHUNKS=10
+REAL_DATASETS=(
+    #"bitmind/bm-eidon-image"
+    "bm-real"
+    #"open-image-v7-256"
+    "celeb-a-hq"
+    "ffhq-256"
+    "MS-COCO-unique-256"
+    "AFHQ"
+    "lfw"
+    "caltech-256"
+    "caltech-101"
+    "dtd"
+    "idoc-mugshots-images"
+)
 NUM_GPUS=10
+MAX_IMAGES=20000  # Set your desired maximum here
 
 # Hugging Face API Token
 if [ -z "$1" ]; then
@@ -12,19 +25,35 @@ if [ -z "$1" ]; then
 fi
 HF_TOKEN=$1
 
-# Loop through each chunk and assign to a GPU
-for (( i=0; i<=$TOTAL_CHUNKS; i++ )); do
-    # Use modulo to distribute chunks across GPUs
-    gpu_id=$(( i % NUM_GPUS ))
-    
-    # Run the command for this chunk - GENERATE annotations but DON'T generate images
-    # Note: We don't need to specify end_index anymore, it will be determined automatically
-    pm2 start generate_synthetic_dataset.py --name "annotate_${DATASET_BASE}_${i}" --no-autorestart -- \
+for idx in "${!REAL_DATASETS[@]}"; do
+    dataset_name="${REAL_DATASETS[$idx]}"
+    gpu_id=$(( idx % NUM_GPUS ))
+
+    # t2i/i2i prompts
+    pm2 start generate_synthetic_dataset.py --name "t2i_$(basename $dataset_name)" --no-autorestart -- \
         --hf_org 'bitmind' \
-        --real_image_dataset_name "${DATASET_BASE}_${i}" \
+        --target_org 'sn34-test' \
+        --real_image_dataset_name "$dataset_name" \
         --diffusion_model "stabilityai/stable-diffusion-xl-base-1.0" \
         --upload_annotations \
+        --private \
         --hf_token "$HF_TOKEN" \
         --start_index 0 \
-        --gpu_id $gpu_id
+        --gpu_id $gpu_id \
+        --annotation_task t2i \
+        --max_images $MAX_IMAGES
+
+    # t2v/i2v prompts
+    # pm2 start generate_synthetic_dataset.py --name "t2v_$(basename $dataset_name)" --no-autorestart -- \
+    #     --hf_org 'bitmind' \
+    #     --target_org 'sn34-test' \
+    #     --real_image_dataset_name "$dataset_name" \
+    #     --diffusion_model "stabilityai/stable-diffusion-xl-base-1.0" \
+    #     --upload_annotations \
+    #     --private \
+    #     --hf_token "$HF_TOKEN" \
+    #     --start_index 0 \
+    #     --gpu_id $gpu_id \
+    #     --annotation_task t2v \
+    #     --max_images $MAX_IMAGES
 done
