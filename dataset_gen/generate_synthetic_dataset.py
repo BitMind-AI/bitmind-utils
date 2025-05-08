@@ -38,7 +38,8 @@ from utils.hugging_face_utils import (
     load_and_sort_dataset,
     upload_to_huggingface,
     slice_dataset,
-    save_as_json
+    save_as_json,
+    upload_videos_as_files
 )
 from utils.batch_prompt_utils import batch_process_dataset
 from utils.image_utils import resize_image, resize_images_in_directory
@@ -548,18 +549,20 @@ def main():
     )
 
     task = get_task(args.diffusion_model)
-    if task == 't2v':
+    if task in ['t2v', 'i2v']:
         synthetic_items_dir = f'test_data/synthetic_videos/{args.real_image_dataset_name}'
     else:
-        if (task in ['i2i', 'i2v']) and args.download_real_images:
-            print(f"Downloading real images for {task} from {hf_dataset_name}")
-            download_real_images(
-                all_images.dataset,
-                args.start_index,
-                args.end_index,
-                real_images_chunk_dir
-            )
         synthetic_items_dir = f'test_data/synthetic_images/{args.real_image_dataset_name}'
+
+    # Download real images for i2i and i2v tasks if requested
+    if task in ['i2i', 'i2v'] and args.download_real_images:
+        print(f"Downloading real images for {task} from {hf_dataset_name}")
+        download_real_images(
+            all_images.dataset,
+            args.start_index,
+            args.end_index,
+            real_images_chunk_dir
+        )
 
     synthetic_items_chunk_dir = Path(
         f'{synthetic_items_dir}/{args.start_index}_{args.end_index}/'
@@ -689,24 +692,35 @@ def main():
 
     if args.upload_synthetic_images and args.hf_token:
         start_time = time.time()
-        print("Loading synthetic image dataset.")
-        synthetic_image_dataset = load_and_sort_dataset(
-            synthetic_items_chunk_dir,
-            'image'
-        )
-        print(
-            "Uploading synthetic image mirrors of " + args.real_image_dataset_name +
-            " to Hugging Face."
-        )
-        upload_to_huggingface(
-            synthetic_image_dataset,
-            hf_synthetic_images_name,
-            args.hf_token,
-            private=args.private
-        )
-        print(
-            f"Synthetic images uploaded in {time.time() - start_time:.2f} seconds."
-        )
+        if task in ['i2v', 't2v']:
+            print("Uploading synthetic videos as individual files to Hugging Face.")
+            upload_videos_as_files(
+                synthetic_items_chunk_dir,
+                hf_synthetic_images_name,
+                args.hf_token,
+                repo_type="dataset",
+                private=args.private
+            )
+            print(f"Synthetic videos uploaded in {time.time() - start_time:.2f} seconds.")
+        else:
+            print("Loading synthetic image dataset.")
+            synthetic_image_dataset = load_and_sort_dataset(
+                synthetic_items_chunk_dir,
+                'image'
+            )
+            print(
+                "Uploading synthetic image mirrors of " + args.real_image_dataset_name +
+                " to Hugging Face."
+            )
+            upload_to_huggingface(
+                synthetic_image_dataset,
+                hf_synthetic_images_name,
+                args.hf_token,
+                private=args.private
+            )
+            print(
+                f"Synthetic images uploaded in {time.time() - start_time:.2f} seconds."
+            )
 
 
 if __name__ == "__main__":
