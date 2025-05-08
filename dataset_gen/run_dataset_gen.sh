@@ -14,14 +14,14 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # Diffusion model to use
 if [ -z "$2" ]; then
-    DIFFUSION_MODEL='THUDM/CogVideoX1.5-5B-I2V'
+    DIFFUSION_MODEL=''
 else
     DIFFUSION_MODEL=$2
 fi
 
 # Define the datasets to process
 DATASETS=(
-    "bm-real"
+    ""
 )
  
 # Number of GPUs available on this host
@@ -44,6 +44,9 @@ declare -A DATASET_ALIASES=(
 
 MAX_GENERATIONS=5000  # Set your global cap
 
+# Configurable split for annotation loading
+SPLIT=""  # Change this to your desired split (e.g., 'train', 't2i', 't2v', etc.)
+
 # Process each dataset sequentially
 for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
     DATASET=${DATASETS[$dataset_idx]}
@@ -51,7 +54,7 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
     
     # Get dataset size by querying the annotations dataset
     echo "Determining dataset size..."
-    DATASET_SIZE=$(python -c "from datasets import load_dataset; print(len(load_dataset('sn34-test/${DATASET}___annotations', split='t2v')))")
+    DATASET_SIZE=$(python -c "from datasets import load_dataset; print(len(load_dataset('sn34-test/${DATASET}___annotations', split='$SPLIT')))")
     echo "Dataset size: $DATASET_SIZE"
     
     # Cap DATASET_SIZE to MAX_GENERATIONS
@@ -101,7 +104,7 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
             --generate_synthetic_images \
             --upload_synthetic_images \
             --download_real_images \
-            --annotation_split t2v \
+            --annotation_split $SPLIT \
             --private \
             --hf_token "$HF_TOKEN" \
             --start_index $START_INDEX \

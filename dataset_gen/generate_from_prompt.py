@@ -1,5 +1,14 @@
 # Add this to synthetic_data_generator.py
 
+# Modify laod_model
+
+    def load_model(self, model_name: Optional[str] = None, modality: Optional[str] = None) -> None:
+        """Load a Hugging Face text-to-image or text-to-video model."""
+        if model_name is not None:
+            if self.model_name == model_name and self.model is not None:
+                # Model already loaded, do nothing
+                return
+
     def generate_from_prompt(
         self,
         prompt: str,
@@ -50,5 +59,5 @@
         )
         
         # Clean up GPU memory
-        self.clear_gpu()
+        # self.clear_gpu()
         return gen_data
