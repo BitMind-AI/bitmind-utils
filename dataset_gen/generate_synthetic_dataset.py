@@ -396,6 +396,8 @@ def save_generated_items(
                 source_image_path = os.path.join(real_images_dir, f"{name}.{ext}")
                 if os.path.exists(source_image_path):
                     image = Image.open(source_image_path)
+                    if image.mode != 'RGB':
+                        image = image.convert('RGB')
                     found = True
                     break
             if not found:
@@ -423,16 +425,35 @@ def save_generated_items(
         else:  # image output
             filename = f"{name}.png"
             file_path = os.path.join(output_dir, filename)
-            if 'gen_output' in result and hasattr(result['gen_output'], 'images'):
-                image = result['gen_output'].images[0]
-                if resize and modality == 'image':
-                    image = resize_image(
-                        image,
-                        TARGET_IMAGE_SIZE[0],
-                        TARGET_IMAGE_SIZE[1]
-                    )
-                image.save(file_path)
-                total_items += 1
+            retry_count = 0
+            max_retries = 3
+            while retry_count < max_retries:
+                if 'gen_output' in result and hasattr(result['gen_output'], 'images'):
+                    image = result['gen_output'].images[0]
+                    if resize and modality == 'image':
+                        image = resize_image(
+                            image,
+                            TARGET_IMAGE_SIZE[0],
+                            TARGET_IMAGE_SIZE[1]
+                        )
+                    from bitmind.synthetic_data_generation.image_utils import is_black_image
+                    if is_black_image(image):
+                        retry_count += 1
+                        print(f"Warning: Generated image for id {name} is black. Retrying ({retry_count}/{max_retries})...")
+                        # Regenerate
+                        result = synthetic_data_generator.generate_from_prompt(
+                            prompt=prompt,
+                            task=task,
+                            image=image,
+                            generate_at_target_size=False
+                        )
+                        continue
+                    image.save(file_path)
+                    total_items += 1
+                    break
+                else:
+                    print(f"No image generated for id {name}.")
+                    break
 
     return total_items
 
