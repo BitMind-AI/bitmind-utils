@@ -13,10 +13,10 @@ cd bitmind-subnet
 2. **File Integration**
 ```bash
 # Copy files from dataset_gen to synthetic_data_generation
-cp -rn /path/to/bitmind-utils/dataset_gen/* /path/to/bitmind-subnet/bitmind/synthetic_data_generation/
+cp -rn ./bitmind-utils/dataset_gen/* ./bitmind-subnet/bitmind/synthetic_data_generation/
 
 # Copy utils directory to bitmind/
-cp -rn /path/to/bitmind-utils/utils /path/to/bitmind-subnet/bitmind/synthetic_data_generation/
+cp -rn ./bitmind-utils/utils ./bitmind-subnet/bitmind/synthetic_data_generation/
 ```
 
 3. **Update Synthetic Data Generator**

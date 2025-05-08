@@ -9,6 +9,9 @@ import pandas as pd
 from math import ceil
 from PIL import Image
 import copy
+import requests
+import imghdr
+import io
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -93,6 +96,7 @@ def parse_arguments():
         --target_org (str): Optional. Target Hugging Face org for uploading annotations (default: same as --hf_org)
         --private (bool): Optional. Upload the dataset as private
         --max_images (int): Optional. Maximum number of images to annotate per dataset.
+        --annotation_split (str): Optional. Which split to load from the annotation dataset (default: train)
     """
     parser = argparse.ArgumentParser(
         description='Generate synthetic images and annotations from a real dataset.'
@@ -220,18 +224,22 @@ def parse_arguments():
         default=None,
         help='Maximum number of images to annotate per dataset.'
     )
+    parser.add_argument(
+        '--annotation_split',
+        type=str,
+        default='train',
+        help='Which split to load from the annotation dataset (default: train)'
+    )
     return parser.parse_args()
 
 
-def download_real_images(dataset, start_index, end_index, output_dir, resize=True):
-    """Download and optionally resize real images from the dataset.
-    
+def download_real_images(dataset, start_index, end_index, output_dir):
+    """Download real images from the dataset
     Args:
         dataset: The source dataset containing images
         start_index: Starting index for processing
         end_index: Ending index for processing
         output_dir: Directory to save the images
-        resize: Whether to resize images to TARGET_IMAGE_SIZE
     """
     os.makedirs(output_dir, exist_ok=True)
     total_downloaded = 0
@@ -263,17 +271,28 @@ def download_real_images(dataset, start_index, end_index, output_dir, resize=Tru
             if image.mode not in ('RGB', 'L'):
                 image = image.convert('RGB')
 
-            # Resize if requested
-            if resize:
-                image = resize_image(
-                    image,
-                    TARGET_IMAGE_SIZE[0],
-                    TARGET_IMAGE_SIZE[1]
-                )
+            # Determine original format if possible
+            original_format = None
+            if hasattr(image, 'format') and image.format:
+                original_format = image.format
+            else:
+                # Try to guess from bytes
+                try:
+                    buf = io.BytesIO()
+                    image.save(buf, format='PNG')
+                    buf.seek(0)
+                    guessed = imghdr.what(buf)
+                    if guessed:
+                        original_format = guessed.upper()
+                    else:
+                        original_format = 'PNG'
+                except Exception:
+                    original_format = 'PNG'
 
-            # Save the image
-            image_path = os.path.join(output_dir, f"{start_index + idx}.png")
-            image.save(image_path)
+            # Use original extension if possible, else default to .png
+            ext = original_format.lower() if original_format else 'png'
+            image_path = os.path.join(output_dir, f"{start_index + idx}.{ext}")
+            image.save(image_path, format=original_format if original_format else 'PNG')
             total_downloaded += 1
 
             if total_downloaded % 100 == 0:
@@ -369,11 +388,18 @@ def save_generated_items(
         # Handle i2i and i2v cases by loading source image
         image = None
         if task in ['i2i', 'i2v']:
-            source_image_path = os.path.join(real_images_dir, f"{name}.png")
-            if not os.path.exists(source_image_path):
-                print(f"Source image not found for {task}: {source_image_path}")
+            # Try to find the image with any common extension
+            possible_exts = ['png', 'jpg', 'jpeg']
+            found = False
+            for ext in possible_exts:
+                source_image_path = os.path.join(real_images_dir, f"{name}.{ext}")
+                if os.path.exists(source_image_path):
+                    image = Image.open(source_image_path)
+                    found = True
+                    break
+            if not found:
+                print(f"Source image not found for {task}: {os.path.join(real_images_dir, f'{name}.*')}")
                 continue
-            image = Image.open(source_image_path)
 
         # Use generate_from_prompt for all tasks
         result = synthetic_data_generator.generate_from_prompt(
@@ -526,13 +552,12 @@ def main():
         synthetic_items_dir = f'test_data/synthetic_videos/{args.real_image_dataset_name}'
     else:
         if (task in ['i2i', 'i2v']) and args.download_real_images:
-            print(f"Downloading and resizing real images for {task} from {hf_dataset_name}")
+            print(f"Downloading real images for {task} from {hf_dataset_name}")
             download_real_images(
                 all_images.dataset,
                 args.start_index,
                 args.end_index,
-                real_images_chunk_dir,
-                resize=args.resize
+                real_images_chunk_dir
             )
         synthetic_items_dir = f'test_data/synthetic_images/{args.real_image_dataset_name}'
 
@@ -570,7 +595,7 @@ def main():
             # Download annotations from Hugging Face
             all_annotations = load_dataset(
                 hf_annotations_name,
-                split='train',
+                split=args.annotation_split,
                 keep_in_memory=False
             )
             df_annotations = pd.DataFrame(all_annotations)
@@ -676,7 +701,8 @@ def main():
         upload_to_huggingface(
             synthetic_image_dataset,
             hf_synthetic_images_name,
-            args.hf_token
+            args.hf_token,
+            private=args.private
         )
         print(
             f"Synthetic images uploaded in {time.time() - start_time:.2f} seconds."

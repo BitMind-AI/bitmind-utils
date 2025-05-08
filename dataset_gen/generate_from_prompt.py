@@ -51,3 +51,4 @@
         
         # Clean up GPU memory
         self.clear_gpu()
+        return gen_data
