@@ -603,7 +603,8 @@ def main():
             hf_dataset_name,
             prompt_generator,
             annotations_chunk_dir,
-            batch_size=batch_size
+            batch_size=batch_size,
+            annotation_task=args.annotation_task
         )
 
         prompt_generator.clear_gpu()
