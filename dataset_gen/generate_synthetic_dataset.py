@@ -36,7 +36,6 @@ from bitmind.validator.config import (
 from utils.hugging_face_utils import (
     dataset_exists_on_hf,
     load_and_sort_dataset,
-    upload_to_huggingface,
     slice_dataset,
     save_as_json,
     upload_videos_as_files
@@ -121,12 +120,6 @@ def parse_arguments():
         help='Diffusion model to use for image generation.'
     )
     parser.add_argument(
-        '--upload_annotations',
-        action='store_true',
-        default=False,
-        help='Upload annotations to Hugging Face.'
-    )
-    parser.add_argument(
         '--download_annotations',
         action='store_true',
         default=False,
@@ -143,12 +136,6 @@ def parse_arguments():
         action='store_true',
         default=False,
         help='Generate synthetic images.'
-    )
-    parser.add_argument(
-        '--upload_synthetic_images',
-        action='store_true',
-        default=False,
-        help='Upload synthetic images to Hugging Face.'
     )
     parser.add_argument(
         '--hf_token',
@@ -571,9 +558,9 @@ def main():
 
     task = get_task(args.diffusion_model)
     if task in ['t2v', 'i2v']:
-        synthetic_items_dir = f'test_data/synthetic_videos/{args.real_image_dataset_name}'
+        synthetic_items_dir = f'test_data/synthetic_videos/{model_name}/{args.real_image_dataset_name}'
     else:
-        synthetic_items_dir = f'test_data/synthetic_images/{args.real_image_dataset_name}'
+        synthetic_items_dir = f'test_data/synthetic_images/{model_name}/{args.real_image_dataset_name}'
 
     # Download real images for i2i and i2v tasks if requested
     if task in ['i2i', 'i2v'] and args.download_real_images:
@@ -659,27 +646,6 @@ def main():
         prompt_generator.clear_gpu()
         images_chunk = None  # Free up memory
 
-    # Upload to Hugging Face
-    if args.upload_annotations and args.hf_token:
-        start_time = time.time()
-        print("Uploading annotations to HF.")
-        print("Loading annotations dataset.")
-        annotations_dataset = load_and_sort_dataset(annotations_chunk_dir, 'json')
-        print(
-            "Uploading annotations of " + args.real_image_dataset_name +
-            " to Hugging Face."
-        )
-        upload_to_huggingface(
-            annotations_dataset,
-            hf_annotations_name,
-            args.hf_token,
-            private=args.private
-        )
-        print(
-            f"Annotations uploaded to Hugging Face in {time.time() - start_time:.2f} "
-            "seconds."
-        )
-
     # Generate synthetic items to local storage.
     if args.generate_synthetic_images:
         # Initialize the synthetic data generator with the specified diffusion model
@@ -710,38 +676,6 @@ def main():
         resize_images_in_directory(synthetic_items_chunk_dir)
         hf_synthetic_images_name += f"___{TARGET_IMAGE_SIZE[0]}"
         print(f"Done resizing existing images.")
-
-    if args.upload_synthetic_images and args.hf_token:
-        start_time = time.time()
-        if task in ['i2v', 't2v']:
-            print("Uploading synthetic videos as individual files to Hugging Face.")
-            upload_videos_as_files(
-                synthetic_items_chunk_dir,
-                hf_synthetic_images_name,
-                args.hf_token,
-                repo_type="dataset",
-                private=args.private
-            )
-            print(f"Synthetic videos uploaded in {time.time() - start_time:.2f} seconds.")
-        else:
-            print("Loading synthetic image dataset.")
-            synthetic_image_dataset = load_and_sort_dataset(
-                synthetic_items_chunk_dir,
-                'image'
-            )
-            print(
-                "Uploading synthetic image mirrors of " + args.real_image_dataset_name +
-                " to Hugging Face."
-            )
-            upload_to_huggingface(
-                synthetic_image_dataset,
-                hf_synthetic_images_name,
-                args.hf_token,
-                private=args.private
-            )
-            print(
-                f"Synthetic images uploaded in {time.time() - start_time:.2f} seconds."
-            )
 
 
 if __name__ == "__main__":

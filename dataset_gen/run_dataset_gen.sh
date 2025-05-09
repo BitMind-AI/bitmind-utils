@@ -102,7 +102,6 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
             --download_annotations \
             --skip_generate_annotations \
             --generate_synthetic_images \
-            --upload_synthetic_images \
             --download_real_images \
             --annotation_split $SPLIT \
             --private \
