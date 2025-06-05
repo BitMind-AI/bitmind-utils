@@ -12,6 +12,9 @@ S3_PREFIX = "semisynthetics"  # or whatever your S3 prefix is
 
 def mask_to_polygons(mask_path):
     mask = np.load(mask_path)
+    # If mask is 3D (e.g., (256, 256, 1)), squeeze to 2D
+    if mask.ndim == 3 and mask.shape[2] == 1:
+        mask = np.squeeze(mask, axis=2)
     if len(mask.shape) == 3:
         mask = cv2.cvtColor(mask, cv2.COLOR_RGB2GRAY)
     _, binary_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
