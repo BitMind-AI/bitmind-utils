@@ -10,22 +10,51 @@ cd bitmind-subnet
 # https://medium.com/bitmindlabs/start-mining-on-the-bitmind-subnet-step-by-step-runpod-tutorial-848bfa0517df
 ```
 
-2. **File Integration**
-```bash
-# Copy files from dataset_gen to synthetic_data_generation
-cp -rn ./bitmind-utils/dataset_gen/* ./bitmind-subnet/bitmind/synthetic_data_generation/
+## ⚡️ Custom BitMind Dataset Generation Pipeline (V3 Update)
 
-# Copy utils directory to bitmind/
-cp -rn ./bitmind-utils/utils ./bitmind-subnet/bitmind/synthetic_data_generation/
+### Important: Use the Custom Generation Pipeline
+
+To enable the new output structure, mask naming, and efficient generation logic, you **must replace the default BitMind subnet pipeline** with the custom version:
+
+```bash
+cp ./bitmind-utils/dataset_gen/generation_pipeline.py ./bitmind-subnet/bitmind/generation/generation_pipeline.py
 ```
 
-3. **Update Synthetic Data Generator**
-- Add the `generate_from_prompt` function from `generate_from_prompt.py` to BitMind subnet's synthetic data generator.
+This ensures:
+- Output files (images, videos, masks) are saved directly in the chunk directory (e.g., `.../synthetic_images/model/dataset/0_499/0.png`)
+- Masks are named `<id>_mask.npy` and paired with their respective images/videos
+- No per-sample `.json` files are written; if you need metadata, collect it into a single `.jsonl` file after generation
+- The pipeline will **not load BLIP2** if you provide pre-generated prompts/annotations
 
-4. **Reinstall Requirements**
-```bash
-pip install -e .
+### New Workflow: `generate_synthetic_dataset.py`
+
+- This script orchestrates the full dataset generation process:
+  1. Downloads or generates annotations (prompts)
+  2. Prepares image samples (with or without prompts)
+  3. Runs the custom `GenerationPipeline` for efficient batch generation
+  4. Outputs are saved with clean, flat naming in the chunk directory
+
+#### Using Pre-Generated Annotations/Prompts
+- If your annotation JSONs already contain prompts, the pipeline will **skip BLIP2 loading** and use your prompts directly (saves GPU memory and time)
+- This is ideal for large-scale or multi-GPU runs
+
+#### Output Structure Example
 ```
+synthetic_images/model_name/dataset_name/0_499/0.png
+synthetic_images/model_name/dataset_name/0_499/0_mask.npy
+synthetic_images/model_name/dataset_name/0_499/1.png
+synthetic_images/model_name/dataset_name/0_499/1_mask.npy
+...etc
+```
+
+#### Collecting Metadata
+- No per-sample `.json` files are written by default
+- If you need a `.jsonl` file, you can post-process the output directory to collect all metadata into a single file
+
+### Troubleshooting & Best Practices
+- **GPU Memory:** Only run one generation job per GPU at a time. BLIP2 is only loaded if prompts are missing.
+- **Prompt Generation:** For large datasets, generate prompts/annotations first, then run generation jobs using those prompts.
+- **Custom Logic:** Always ensure you are using the patched `generation_pipeline.py` in your BitMind subnet for the new logic to take effect.
 
 ## Tool Overview
 

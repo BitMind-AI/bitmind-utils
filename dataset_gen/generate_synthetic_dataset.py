@@ -12,6 +12,7 @@ import copy
 import requests
 import imghdr
 import io
+import numpy as np
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -21,18 +22,6 @@ logging.basicConfig(
 )
 
 from datasets import load_dataset
-
-from synthetic_data_generator import SyntheticDataGenerator
-from prompt_generator import PromptGenerator
-from base_miner.datasets import ImageDataset
-from bitmind.validator.config import (
-    TARGET_IMAGE_SIZE,
-    IMAGE_ANNOTATION_MODEL,
-    TEXT_MODERATION_MODEL,
-    get_task,
-    get_modality,
-    MODELS
-)
 from utils.hugging_face_utils import (
     dataset_exists_on_hf,
     load_and_sort_dataset,
@@ -43,7 +32,11 @@ from utils.hugging_face_utils import (
 from utils.batch_prompt_utils import batch_process_dataset
 from utils.image_utils import resize_image, resize_images_in_directory
 from diffusers.utils import export_to_video
+from bitmind.generation.prompt_generator import PromptGenerator
+from bitmind.generation.generation_pipeline import GenerationPipeline, IMAGE_ANNOTATION_MODEL, TEXT_MODERATION_MODEL
+from bitmind.generation.models import initialize_model_registry
 
+TARGET_IMAGE_SIZE = (256, 256)
 PROGRESS_INCREMENT = 10
 
 
@@ -361,10 +354,11 @@ def save_generated_items(
 ):
     """Save generated items (images or videos) from annotations."""
     total_items = 0
-    task = get_task(synthetic_data_generator.model_name)
-    modality = get_modality(synthetic_data_generator.model_name)
+    model_registry = initialize_model_registry()
+    task = model_registry.get_task(synthetic_data_generator.model_name)
+    modality = model_registry.get_modality(synthetic_data_generator.model_name)
     
-    model_config = MODELS.get(synthetic_data_generator.model_name, {})
+    model_config = model_registry.get_model(synthetic_data_generator.model_name)
 
     for json_filename in json_filenames:
         json_path = os.path.join(annotations_dir, json_filename)
@@ -504,11 +498,8 @@ def main():
 
     # Load the dataset first to determine its size
     print(f"Loading dataset {hf_dataset_name} to determine size...")
-    all_images = ImageDataset(
-        huggingface_dataset_path=hf_dataset_name,
-        huggingface_dataset_split='train'
-    )
-    dataset_size = len(all_images.dataset)
+    dataset = load_dataset(hf_dataset_name, split='train')
+    dataset_size = len(dataset)
     print(f"Dataset size: {dataset_size} images")
 
     # Set end_index based on max_images if provided
@@ -556,7 +547,8 @@ def main():
         f'{real_image_samples_dir}/{args.start_index}_{args.end_index}/'
     )
 
-    task = get_task(args.diffusion_model)
+    model_registry = initialize_model_registry()
+    task = model_registry.get_task(args.diffusion_model)
     if task in ['t2v', 'i2v']:
         synthetic_items_dir = f'test_data/synthetic_videos/{model_name}/{args.real_image_dataset_name}'
     else:
@@ -566,7 +558,7 @@ def main():
     if task in ['i2i', 'i2v'] and args.download_real_images:
         print(f"Downloading real images for {task} from {hf_dataset_name}")
         download_real_images(
-            all_images.dataset,
+            dataset,
             args.start_index,
             args.end_index,
             real_images_chunk_dir
@@ -624,13 +616,13 @@ def main():
             print("Annotations already saved to disk.")
     elif not args.skip_generate_annotations:
         print("Generating new annotations.")
-        all_images = ImageDataset(hf_dataset_name, 'train')
+        dataset = load_dataset(hf_dataset_name, split='train')
         images_chunk = slice_dataset(
-            all_images.dataset,
+            dataset,
             start_index=args.start_index,
             end_index=args.end_index
         )
-        all_images = None
+        dataset = None
 
         # Use the batch processing utility instead of the old function
         batch_process_dataset(
@@ -646,30 +638,60 @@ def main():
         prompt_generator.clear_gpu()
         images_chunk = None  # Free up memory
 
-    # Generate synthetic items to local storage.
+    # Generate synthetic items to local storage using BitMind subnet pipeline
     if args.generate_synthetic_images:
-        # Initialize the synthetic data generator with the specified diffusion model
-        synthetic_data_generator = SyntheticDataGenerator(
-            model_name=args.diffusion_model,
-            use_random_model=False,
-            prompt_type='none',  # We'll provide prompts directly
-            device=f'cuda:{args.gpu_id}'
+        # Prepare image_samples from annotation chunk (or real images for i2i/i2v)
+        # We'll use the annotation chunk if it exists, else fallback to all_images
+        annotations_dir = f'test_data/annotations/{args.real_image_dataset_name}'
+        annotations_chunk_dir = Path(
+            f"{annotations_dir}/{args.start_index}_{args.end_index}/"
         )
+        image_samples = []
+        if annotations_chunk_dir.exists() and any(annotations_chunk_dir.iterdir()):
+            # Use annotation chunk to get prompts and ids
+            for json_filename in sorted(os.listdir(annotations_chunk_dir)):
+                if not json_filename.endswith('.json'):
+                    continue
+                json_path = os.path.join(annotations_chunk_dir, json_filename)
+                with open(json_path, 'r') as file:
+                    annotation = json.load(file)
+                idx = annotation['id']
+                # For i2i/i2v, load the real image
+                image = None
+                if model_registry.get_task(args.diffusion_model) in ['i2i', 'i2v']:
+                    possible_exts = ['png', 'jpg', 'jpeg']
+                    for ext in possible_exts:
+                        real_img_path = os.path.join(f'test_data/real_images/{args.real_image_dataset_name}/{args.start_index}_{args.end_index}', f"{idx}.{ext}")
+                        if os.path.exists(real_img_path):
+                            image = Image.open(real_img_path)
+                            if image.mode != 'RGB':
+                                image = image.convert('RGB')
+                            image = np.array(image)
+                            break
+                image_samples.append({'image': image, 'prompt': annotation['description'], 'id': idx})
+        else:
+            # Fallback: use all_images
+            for idx in range(args.start_index, args.end_index + 1):
+                item = dataset[idx]
+                image = item['image']
+                if isinstance(image, Image.Image):
+                    image = np.array(image)
+                image_samples.append({'image': image, 'id': idx})
 
-        synthetic_items_chunk_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Generating and saving items to {synthetic_items_chunk_dir}.")
-        generate_and_save_synthetic_items(
-            annotations_chunk_dir,
-            synthetic_data_generator,
-            synthetic_items_chunk_dir,
-            real_images_chunk_dir,
-            args.start_index,
-            args.end_index,
-            batch_size=batch_size,
-            resize=args.resize
+        # Initialize model registry and pipeline
+        output_dir = Path(f'test_data/synthetic_images/{model_name}/{args.real_image_dataset_name}/{args.start_index}_{args.end_index}')
+        output_dir.mkdir(parents=True, exist_ok=True)
+        model_registry = initialize_model_registry()
+        pipeline = GenerationPipeline(output_dir=output_dir, model_registry=model_registry, device=f"cuda:{args.gpu_id}")
+
+        # Run generation for the specified model and all supported tasks
+        print(f"Generating synthetic data using BitMind subnet pipeline for model: {args.diffusion_model}")
+        pipeline.generate(
+            image_samples=image_samples,
+            tasks=[model_registry.get_task(args.diffusion_model)],
+            model_names=[args.diffusion_model]
         )
-
-        synthetic_data_generator.clear_gpu()
+        print(f"Generation complete. Outputs saved to {output_dir}")
 
     if args.resize_existing:
         print(f"Resizing images in {synthetic_items_chunk_dir}.")
