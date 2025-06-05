@@ -6,7 +6,7 @@ import concurrent.futures
 import argparse
 
 # CONFIGURATION
-LOCAL_DATASETS_ROOT = "dreamshaper-8-inpainting"  # or the parent directory containing all datasets
+LOCAL_DATASETS_ROOT = "/workspace/bitmind-utils/dataset_gen/test_data/synthetic_images/dreamshaper-8-inpainting"  # or the parent directory containing all datasets
 S3_BUCKET = "subnet-34-storage"
 S3_PREFIX = "semisynthetics"  # or whatever your S3 prefix is
 
@@ -28,15 +28,15 @@ def mask_to_polygons(mask_path):
     return polygons
 
 def local_path_to_s3_uri(local_path):
-    # Remove the local root and prepend S3 info
     rel_path = os.path.relpath(local_path, LOCAL_DATASETS_ROOT)
     parts = rel_path.split(os.sep)
+    dataset = os.path.basename(LOCAL_DATASETS_ROOT)
     if len(parts) >= 2:
-        dataset = parts[0]
+        subdataset = parts[0]
         filename = parts[-1]
-        s3_key = os.path.join(S3_PREFIX, LOCAL_DATASETS_ROOT, dataset, filename).replace("\\", "/")
+        s3_key = os.path.join(S3_PREFIX, dataset, subdataset, filename).replace("\\", "/")
     else:
-        s3_key = os.path.join(S3_PREFIX, LOCAL_DATASETS_ROOT, rel_path).replace("\\", "/")
+        s3_key = os.path.join(S3_PREFIX, dataset, rel_path).replace("\\", "/")
     return f"s3://{S3_BUCKET}/{s3_key}"
 
 def process_image_mask_pair(args_tuple):
