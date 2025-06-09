@@ -17,7 +17,7 @@ cd bitmind-subnet
 To ensure your dataset generation continues even if your terminal closes, run the entire script with pm2:
 
 ```bash
-pm2 start run_dataset_gen.sh --interpreter bash --name dataset_gen_master
+pm2 start run_dataset_gen.sh --interpreter bash --name dataset_gen_master -- YOUR_HF_TOKEN
 ```
 
 This will keep the script running in the background and process all datasets as configured.
