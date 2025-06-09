@@ -18,10 +18,6 @@ import cv2
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-logging.basicConfig(
-    level=logging.ERROR,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
 
 from datasets import load_dataset
 from utils.hugging_face_utils import (
@@ -42,6 +38,15 @@ from bitmind.transforms import apply_random_augmentations
 TARGET_IMAGE_SIZE = (256, 256)
 PROGRESS_INCREMENT = 10
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("generation_debug.log"),
+        logging.StreamHandler()
+    ]
+)
+logging.info("=== PYTHON LOGGER TEST: Script started ===")
 
 def parse_arguments():
     """Parse command-line arguments for generating synthetic images and annotations.
@@ -403,6 +408,11 @@ def save_generated_items(
             generate_at_target_size=False
         )
 
+        # --- DEBUG: Log result keys/type ---
+        logging.info(f"Processing annotation {name}, result type: {type(result)}, keys: {list(result.keys()) if isinstance(result, dict) else 'N/A'}, full result: {result}")
+        if isinstance(result, dict) and 'gen_output' in result:
+            logging.info(f"gen_output type: {type(result['gen_output'])}, dir: {dir(result['gen_output'])}")
+
         # Handle different output types
         if modality == 'video':
             filename = f"{name}.mp4"
@@ -419,37 +429,9 @@ def save_generated_items(
             retry_count = 0
             max_retries = 3
             while retry_count < max_retries:
-                if 'gen_output' in result and hasattr(result['gen_output'], 'images'):
-                    image = result['gen_output'].images[0]
-                    if resize and modality == 'image':
-                        image = resize_image(
-                            image,
-                            TARGET_IMAGE_SIZE[0],
-                            TARGET_IMAGE_SIZE[1]
-                        )
-                    from bitmind.synthetic_data_generation.image_utils import is_black_image
-                    if is_black_image(image):
-                        retry_count += 1
-                        print(f"Warning: Generated image for id {name} is black. Retrying ({retry_count}/{max_retries})...")
-                        # Regenerate
-                        result = synthetic_data_generator.generate_from_prompt(
-                            prompt=prompt,
-                            task=task,
-                            image=image,
-                            generate_at_target_size=False
-                        )
-                        continue
-                    # Apply base augmentation to image
-                    img_np = np.array(image)
-                    img_aug, _, _ = apply_random_augmentations(img_np, (256, 256), level_probs={0: 1.0})
-                    image = Image.fromarray(img_aug)
-                    # Save augmented image
-                    image.save(file_path)
-                    total_items += 1
-                    break
-                else:
-                    print(f"No image generated for id {name}.")
-                    break
+                # All image/mask saving and augmentation is now handled in the generation pipeline.
+                # Only handle metadata or result processing here if needed.
+                break
 
     return total_items
 
@@ -683,9 +665,7 @@ def generate_and_save_synthetic_items_with_mask_logging(
                             and result['gen_output']['image'].images
                         ):
                             img = result['gen_output']['image'].images[0]
-                            if resize:
-                                img = resize_image(img, TARGET_IMAGE_SIZE[0], TARGET_IMAGE_SIZE[1])
-                            # Apply base augmentation to image
+                            # Always apply base augmentation to generated image before saving
                             img_np = np.array(img)
                             img_aug, _, _ = apply_random_augmentations(img_np, (256, 256), level_probs={0: 1.0})
                             img = Image.fromarray(img_aug)
@@ -698,20 +678,38 @@ def generate_and_save_synthetic_items_with_mask_logging(
                             except Exception as e:
                                 print(f"Failed to save image {out_path}: {e}")
                                 logging.error(f"Failed to save image {out_path}: {e}")
-                            # Save mask image if present
+                            # Always apply base augmentation to mask before saving
                             mask_img = result['gen_output'].get('mask_image', None)
                             if mask_img is not None:
                                 mask_np = np.array(mask_img)
-                                if mask_np.ndim == 3 and mask_np.shape[2] == 3:
-                                    mask_np = cv2.cvtColor(mask_np, cv2.COLOR_RGB2GRAY)
-                                mask_np = mask_np[..., None] if mask_np.ndim == 2 else mask_np
-                                mask_aug, _, _ = apply_random_augmentations(mask_np, (256, 256), level_probs={0: 1.0})
-                                if mask_aug.ndim == 3 and mask_aug.shape[2] == 1:
-                                    mask_aug = np.squeeze(mask_aug, axis=2)
-                                mask_img = Image.fromarray(mask_aug)
-                                mask_out_path = out_path.replace('.png', '_mask.png')
-                                mask_img.save(mask_out_path)
-                                print(f"Saved mask: {mask_out_path}")
+                                if mask_np.size == 0:
+                                    print(f"Warning: Mask for id {name} is empty, skipping mask save.")
+                                else:
+                                    if mask_np.ndim == 1:
+                                        side = int(np.sqrt(mask_np.shape[0]))
+                                        if side * side != mask_np.shape[0]:
+                                            print(f"Warning: Mask for id {name} shape {mask_np.shape} is not square, skipping mask save.")
+                                        else:
+                                            mask_np = mask_np.reshape((side, side))
+                                    if mask_np.ndim == 3 and mask_np.shape[2] == 3:
+                                        mask_np = cv2.cvtColor(mask_np, cv2.COLOR_RGB2GRAY)
+                                    if mask_np.ndim == 2:
+                                        mask_np = mask_np[..., None]  # Make it (H, W, 1)
+                                    if mask_np.ndim != 3:
+                                        print(f"ERROR: Mask for id {name} is not 3D after all conversions, shape: {mask_np.shape}")
+                                    else:
+                                        mask_aug, _, _ = apply_random_augmentations(mask_np, (256, 256), level_probs={0: 1.0})
+                                        if mask_aug.ndim == 3 and mask_aug.shape[2] == 1:
+                                            mask_aug = np.squeeze(mask_aug, axis=2)
+                                        # Save as PNG
+                                        mask_img_aug = Image.fromarray(mask_aug)
+                                        mask_out_path = out_path.replace('.png', '_mask.png')
+                                        mask_img_aug.save(mask_out_path)
+                                        print(f"Saved mask: {mask_out_path}")
+                                        # Save as .npy
+                                        mask_npy_out_path = mask_out_path.replace('.png', '.npy')
+                                        np.save(mask_npy_out_path, mask_aug)
+                                print(f"Saved mask (npy): {mask_npy_out_path}")
                             # Save original (real) image with base augmentations for comparison
                             if image is not None:
                                 real_img = image

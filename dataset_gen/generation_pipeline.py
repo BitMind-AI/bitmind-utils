@@ -23,6 +23,7 @@ from bitmind.generation.util.model import (
 )
 from bitmind.generation.model_registry import ModelRegistry
 from bitmind.generation.models import initialize_model_registry
+from bitmind.transforms import apply_random_augmentations
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -536,11 +537,38 @@ class GenerationPipeline:
 
         if modality == "image":
             save_path = str(base_path.with_suffix(".png"))
-            media_sample[modality].images[0].save(save_path)
+            # Augment and resize image before saving
+            img_np = np.array(media_sample[modality].images[0])
+            img_aug, _, _ = apply_random_augmentations(img_np, (256, 256), level_probs={0: 1.0})
+            img_aug_pil = Image.fromarray(img_aug)
+            bt.logging.info(f"Saving augmented image of shape: {img_aug_pil.size}")
+            img_aug_pil.save(save_path)
             if "mask_image" in media_sample:
-                mask_path = str(base_path.with_name(base_path.stem + "_mask.npy"))
-                metadata["mask_path"] = mask_path
-                np.save(mask_path, np.array(media_sample["mask_image"]))
+                mask_np = np.array(media_sample["mask_image"])
+                if mask_np.size == 0:
+                    bt.logging.warning(f"Mask is empty, skipping mask save.")
+                else:
+                    if mask_np.ndim == 1:
+                        side = int(np.sqrt(mask_np.shape[0]))
+                        if side * side != mask_np.shape[0]:
+                            bt.logging.warning(f"Mask shape {mask_np.shape} is not square, skipping mask save.")
+                        else:
+                            mask_np = mask_np.reshape((side, side))
+                    if mask_np.ndim == 3 and mask_np.shape[2] == 3:
+                        import cv2
+                        mask_np = cv2.cvtColor(mask_np, cv2.COLOR_RGB2GRAY)
+                    if mask_np.ndim == 2:
+                        mask_np = mask_np[..., None]  # Make it (H, W, 1)
+                    if mask_np.ndim != 3:
+                        bt.logging.error(f"Mask is not 3D after all conversions, shape: {mask_np.shape}")
+                    else:
+                        mask_aug, _, _ = apply_random_augmentations(mask_np, (256, 256), level_probs={0: 1.0})
+                        if mask_aug.ndim == 3 and mask_aug.shape[2] == 1:
+                            mask_aug = np.squeeze(mask_aug, axis=2)
+                        bt.logging.info(f"Saving augmented mask of shape: {mask_aug.shape}")
+                        mask_path = str(base_path.with_name(base_path.stem + "_mask.npy"))
+                        metadata["mask_path"] = mask_path
+                        np.save(mask_path, mask_aug)
         elif modality == "video":
             save_path = str(base_path.with_suffix(".mp4"))
             export_to_video(media_sample[modality].frames[0], save_path, fps=30)
