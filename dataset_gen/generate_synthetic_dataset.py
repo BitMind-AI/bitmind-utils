@@ -13,6 +13,8 @@ import requests
 import imghdr
 import io
 import numpy as np
+import jsonlines
+import cv2
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -35,6 +37,7 @@ from diffusers.utils import export_to_video
 from bitmind.generation.prompt_generator import PromptGenerator
 from bitmind.generation.generation_pipeline import GenerationPipeline, IMAGE_ANNOTATION_MODEL, TEXT_MODERATION_MODEL
 from bitmind.generation.models import initialize_model_registry
+from bitmind.transforms import apply_random_augmentations
 
 TARGET_IMAGE_SIZE = (256, 256)
 PROGRESS_INCREMENT = 10
@@ -76,7 +79,7 @@ def parse_arguments():
         --upload_annotations (bool): Optional. Flag to upload annotations to Hugging Face.
         --download_annotations (bool): Optional. Flag to download existing annotations.
         --skip_generate_annotations (bool): Optional. Flag to skip local annotation generation.
-                                          Useful when local annotations exist.
+                                        Useful when local annotations exist.
         --generate_synthetic_images (bool): Optional. Flag to generate synthetic images.
         --upload_synthetic_images (bool): Optional. Flag to upload synthetic images.
         --hf_token (str): Required for interfacing with Hugging Face.
@@ -90,6 +93,7 @@ def parse_arguments():
         --private (bool): Optional. Upload the dataset as private
         --max_images (int): Optional. Maximum number of images to annotate per dataset.
         --annotation_split (str): Optional. Which split to load from the annotation dataset (default: train)
+        --test_mask_randomization (bool): Optional. Test a variety of mask randomization settings and log mask parameters/results to a JSONL file.
     """
     parser = argparse.ArgumentParser(
         description='Generate synthetic images and annotations from a real dataset.'
@@ -210,6 +214,12 @@ def parse_arguments():
         type=str,
         default='train',
         help='Which split to load from the annotation dataset (default: train)'
+    )
+    parser.add_argument(
+        '--test_mask_randomization',
+        action='store_true',
+        default=False,
+        help='Test a variety of mask randomization settings and log mask parameters/results to a JSONL file.'
     )
     return parser.parse_args()
 
@@ -429,6 +439,11 @@ def save_generated_items(
                             generate_at_target_size=False
                         )
                         continue
+                    # Apply base augmentation to image
+                    img_np = np.array(image)
+                    img_aug, _, _ = apply_random_augmentations(img_np, (256, 256), level_probs={0: 1.0})
+                    image = Image.fromarray(img_aug)
+                    # Save augmented image
                     image.save(file_path)
                     total_items += 1
                     break
@@ -490,6 +505,236 @@ def generate_and_save_synthetic_items(
     duration = time.time() - start_time
     print(f"All {total_items} synthetic items generated in {duration:.2f} seconds.")
     print(f"Mean generation time: {duration/max(total_items, 1):.2f} seconds.")
+
+
+def to_python_types(obj):
+    if isinstance(obj, dict):
+        return {k: to_python_types(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [to_python_types(v) for v in obj]
+    elif isinstance(obj, tuple):
+        return tuple(to_python_types(v) for v in obj)
+    elif isinstance(obj, (np.integer, np.int32, np.int64, np.uint8, np.uint16, np.uint32, np.uint64)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float32, np.float64)):
+        return float(obj)
+    elif hasattr(obj, 'item') and callable(obj.item):
+        return obj.item()
+    else:
+        return obj
+
+
+def generate_and_save_synthetic_items_with_mask_logging(
+    annotations_dir,
+    synthetic_data_generator,
+    output_dir,
+    real_images_dir,
+    start_index,
+    end_index,
+    model_name,
+    batch_size=16,
+    resize=True,
+    mask_param_grid=None,
+    mask_jsonl_path=None,
+):
+    """
+    Generate and save synthetic items (images or videos) from annotations, testing a variety of mask randomization settings.
+    Log mask parameters and results to a JSONL file.
+    Also saves the mask image as PNG if present.
+    Adds debug logging for model output.
+    """
+    import itertools
+    from tqdm import tqdm
+    import logging
+    os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+    if mask_param_grid is None:
+        mask_param_grid = [
+            # 1. Smallest possible, single, sharp rectangle, center
+            {
+                "min_size_ratio": 0.15,
+                "max_size_ratio": 0.15,
+                "allow_multiple": False,
+                "allowed_shapes": ["rectangle"],
+                "edge_bias": 0.0,
+            },
+            # 2. Largest possible, single, sharp rectangle, edge
+            {
+                "min_size_ratio": 0.5,
+                "max_size_ratio": 0.5,
+                "allow_multiple": False,
+                "allowed_shapes": ["rectangle"],
+                "edge_bias": 1.0,
+            },
+            # 3. Smallest, single circle, center
+            {
+                "min_size_ratio": 0.15,
+                "max_size_ratio": 0.15,
+                "allow_multiple": False,
+                "allowed_shapes": ["circle"],
+                "edge_bias": 0.0,
+            },
+            # 4. Largest, single ellipse, edge
+            {
+                "min_size_ratio": 0.5,
+                "max_size_ratio": 0.5,
+                "allow_multiple": False,
+                "allowed_shapes": ["ellipse"],
+                "edge_bias": 1.0,
+            },
+            # 5. Smallest, single triangle, center
+            {
+                "min_size_ratio": 0.15,
+                "max_size_ratio": 0.15,
+                "allow_multiple": False,
+                "allowed_shapes": ["triangle"],
+                "edge_bias": 0.0,
+            },
+            # 6. Largest, single triangle, edge
+            {
+                "min_size_ratio": 0.5,
+                "max_size_ratio": 0.5,
+                "allow_multiple": False,
+                "allowed_shapes": ["triangle"],
+                "edge_bias": 1.0,
+            },
+            # 7. Multiple, all shapes, min size, center
+            {
+                "min_size_ratio": 0.15,
+                "max_size_ratio": 0.5,
+                "allow_multiple": True,
+                "allowed_shapes": ["rectangle", "circle", "ellipse", "triangle"],
+                "edge_bias": 0.0,
+            },
+            # 8. Multiple, all shapes, max size, edge
+            {
+                "min_size_ratio": 0.15,
+                "max_size_ratio": 0.5,
+                "allow_multiple": True,
+                "allowed_shapes": ["rectangle", "circle", "ellipse", "triangle"],
+                "edge_bias": 1.0,
+            },
+            # 9. Multiple, all shapes, random edge/center
+            {
+                "min_size_ratio": 0.15,
+                "max_size_ratio": 0.5,
+                "allow_multiple": True,
+                "allowed_shapes": ["rectangle", "circle", "ellipse", "triangle"],
+                "edge_bias": 0.5,
+            },
+        ]
+    if mask_jsonl_path is None:
+        mask_jsonl_path = os.path.join(str(output_dir), "mask_generation_log.jsonl")
+    # Collect all valid annotation file paths first
+    valid_files = []
+    for json_filename in sorted(os.listdir(annotations_dir)):
+        try:
+            file_index = int(json_filename[:-5])
+        except ValueError:
+            continue
+        if start_index <= file_index <= end_index:
+            valid_files.append(json_filename)
+    total_valid_files = len(valid_files)
+    model_registry = initialize_model_registry()
+    task = model_registry.get_task(model_name)
+    modality = model_registry.get_modality(model_name)
+    with jsonlines.open(mask_jsonl_path, mode='w') as writer:
+        with torch.no_grad():
+            for i in tqdm(range(0, total_valid_files, batch_size)):
+                batch_files = valid_files[i:i+batch_size]
+                for json_filename in batch_files:
+                    json_path = os.path.join(annotations_dir, json_filename)
+                    with open(json_path, 'r') as file:
+                        annotation = json.load(file)
+                    prompt = annotation['description']
+                    name = annotation['id']
+                    # For i2i/i2v, load the real image
+                    image = None
+                    if task == 'i2i':
+                        possible_exts = ['png', 'jpg', 'jpeg']
+                        for ext in possible_exts:
+                            real_img_path = os.path.join(real_images_dir, f"{name}.{ext}")
+                            if os.path.exists(real_img_path):
+                                image = Image.open(real_img_path)
+                                if image.mode != 'RGB':
+                                    image = image.convert('RGB')
+                                image = np.array(image)
+                                break
+                    for mask_params in mask_param_grid:
+                        synthetic_data_generator.mask_params = mask_params
+                        result = synthetic_data_generator.generate_from_prompt(
+                            prompt=prompt,
+                            task=task,
+                            image=image,
+                            generate_at_target_size=False,
+                            mask_params=mask_params
+                        )
+                        # Debug logging for model output
+                        print(f"Result for id {name} with mask_params {mask_params}: {result['gen_output']}")
+                        if hasattr(result['gen_output'], 'images'):
+                            print(f"Images: {getattr(result['gen_output'], 'images', None)}")
+                        if hasattr(result['gen_output'], 'mask_image'):
+                            print(f"Mask image: {getattr(result['gen_output'], 'mask_image', None)}")
+                        # Save image and log mask params
+                        if (
+                            modality == 'image'
+                            and 'gen_output' in result
+                            and 'image' in result['gen_output']
+                            and hasattr(result['gen_output']['image'], 'images')
+                            and result['gen_output']['image'].images
+                        ):
+                            img = result['gen_output']['image'].images[0]
+                            if resize:
+                                img = resize_image(img, TARGET_IMAGE_SIZE[0], TARGET_IMAGE_SIZE[1])
+                            # Apply base augmentation to image
+                            img_np = np.array(img)
+                            img_aug, _, _ = apply_random_augmentations(img_np, (256, 256), level_probs={0: 1.0})
+                            img = Image.fromarray(img_aug)
+                            # Save augmented image
+                            out_name = f"{name}_masktest_{hash(str(mask_params)) & 0xFFFF}.png"
+                            out_path = os.path.join(output_dir, out_name)
+                            try:
+                                img.save(out_path)
+                                print(f"Saved image: {out_path}")
+                            except Exception as e:
+                                print(f"Failed to save image {out_path}: {e}")
+                                logging.error(f"Failed to save image {out_path}: {e}")
+                            # Save mask image if present
+                            mask_img = result['gen_output'].get('mask_image', None)
+                            if mask_img is not None:
+                                mask_np = np.array(mask_img)
+                                if mask_np.ndim == 3 and mask_np.shape[2] == 3:
+                                    mask_np = cv2.cvtColor(mask_np, cv2.COLOR_RGB2GRAY)
+                                mask_np = mask_np[..., None] if mask_np.ndim == 2 else mask_np
+                                mask_aug, _, _ = apply_random_augmentations(mask_np, (256, 256), level_probs={0: 1.0})
+                                if mask_aug.ndim == 3 and mask_aug.shape[2] == 1:
+                                    mask_aug = np.squeeze(mask_aug, axis=2)
+                                mask_img = Image.fromarray(mask_aug)
+                                mask_out_path = out_path.replace('.png', '_mask.png')
+                                mask_img.save(mask_out_path)
+                                print(f"Saved mask: {mask_out_path}")
+                            # Save original (real) image with base augmentations for comparison
+                            if image is not None:
+                                real_img = image
+                                if isinstance(real_img, np.ndarray):
+                                    real_img = Image.fromarray(real_img)
+                                real_img_aug = real_img.resize((TARGET_IMAGE_SIZE[0], TARGET_IMAGE_SIZE[1]), Image.LANCZOS)
+                                real_img_np = np.array(real_img_aug)
+                                real_img_aug_np, _, _ = apply_random_augmentations(real_img_np, (256, 256), level_probs={0: 1.0})
+                                real_img_aug_final = Image.fromarray(real_img_aug_np)
+                                real_img_out_path = os.path.join(output_dir, f"{name}_real_aug.png")
+                                real_img_aug_final.save(real_img_out_path)
+                                print(f"Saved real augmented image: {real_img_out_path}")
+                            writer.write(to_python_types({
+                                "id": name,
+                                "mask_params": mask_params,
+                                "mask_metadata": result['gen_output'].get('mask_metadata', None),
+                                "output_path": out_path,
+                                "mask_output_path": mask_out_path if mask_img is not None else None
+                            }))
+                        else:
+                            print(f"No image generated for id {name} with mask_params {mask_params}. Skipping.")
+                            logging.warning(f"No image generated for id {name} with mask_params {mask_params}. Skipping.")
+    synthetic_data_generator.clear_gpu()
 
 
 def main():
@@ -686,12 +931,27 @@ def main():
 
         # Run generation for the specified model and all supported tasks
         print(f"Generating synthetic data using BitMind subnet pipeline for model: {args.diffusion_model}")
-        pipeline.generate(
-            image_samples=image_samples,
-            tasks=[model_registry.get_task(args.diffusion_model)],
-            model_names=[args.diffusion_model]
-        )
-        print(f"Generation complete. Outputs saved to {output_dir}")
+        if getattr(args, 'test_mask_randomization', False):
+            print("Testing mask randomization and logging mask parameters/results to JSONL...")
+            generate_and_save_synthetic_items_with_mask_logging(
+                annotations_chunk_dir,
+                pipeline,
+                output_dir,
+                real_images_chunk_dir,
+                args.start_index,
+                args.end_index,
+                args.diffusion_model,
+                batch_size=batch_size,
+                resize=args.resize,
+            )
+            print(f"Mask randomization test complete. See mask_generation_log.jsonl in {output_dir}")
+        else:
+            pipeline.generate(
+                image_samples=image_samples,
+                tasks=[model_registry.get_task(args.diffusion_model)],
+                model_names=[args.diffusion_model]
+            )
+            print(f"Generation complete. Outputs saved to {output_dir}")
 
     if args.resize_existing:
         print(f"Resizing images in {synthetic_items_chunk_dir}.")

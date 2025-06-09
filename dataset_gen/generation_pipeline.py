@@ -378,7 +378,7 @@ class GenerationPipeline:
             bt.logging.error(traceback.format_exc())
             return False
 
-    def _generate_media_with_model(self, model_name, prompt, image):
+    def _generate_media_with_model(self, model_name, prompt, image, mask_params=None):
         model_config = self.model_registry.get_model_dict(model_name)
         task = self.model_registry.get_task(model_name)
 
@@ -393,7 +393,7 @@ class GenerationPipeline:
 
         bt.logging.debug("Preparing generation arguments")
         gen_args = model_config.get("generate_args", {}).copy()
-        mask_center = None
+        mask_metadata = None
 
         # prep inptask-specific generation args
         if task == "i2i":
@@ -404,7 +404,10 @@ class GenerationPipeline:
             if image.size[0] > target_size[0] or image.size[1] > target_size[1]:
                 image = image.resize(target_size, Image.Resampling.LANCZOS)
 
-            gen_args["mask_image"], mask_center = create_random_mask(image.size)
+            if mask_params is not None:
+                gen_args["mask_image"], mask_metadata = create_random_mask(image.size, **mask_params)
+            else:
+                gen_args["mask_image"], mask_metadata = create_random_mask(image.size)
             gen_args["image"] = image
 
         elif task == "i2v":
@@ -476,7 +479,7 @@ class GenerationPipeline:
             "model_name": model_name,
             "time": time.time(),
             "gen_duration": gen_time,
-            "mask_center": mask_center,
+            "mask_metadata": mask_metadata,
         }
         for k in ["num_inference_steps", "guidance_scale", "resolution"]:
             output[k] = gen_args.get(k, "")
@@ -569,3 +572,8 @@ class GenerationPipeline:
 
     def shutdown(self):
         self.clear_gpu()
+
+    def generate_from_prompt(self, prompt, task, image=None, model_name=None, generate_at_target_size=False, mask_params=None):
+        if model_name is None:
+            model_name = self.current_model_name or self.model_registry.select_random_model(task)
+        return {"gen_output": self._generate_media_with_model(model_name, prompt, image, mask_params=mask_params)}
