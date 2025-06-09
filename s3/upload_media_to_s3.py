@@ -48,7 +48,16 @@ def main():
             local_path = os.path.join(root, file)
             # S3 key: s3_prefix + relative path from media_dir
             rel_path = os.path.relpath(local_path, args.media_dir)
-            s3_key = os.path.join(args.s3_prefix, rel_path).replace("\\", "/")
+            parts = rel_path.split(os.sep)
+
+            # Flatten all directories immediately under the given directory
+            # e.g., parts = [dataset, index_dir, filename]
+            if len(parts) >= 3:
+                # S3 key: s3_prefix/dataset/filename
+                s3_key = os.path.join(args.s3_prefix, parts[0], parts[-1]).replace("\\", "/")
+            else:
+                # Default: preserve structure
+                s3_key = os.path.join(args.s3_prefix, rel_path).replace("\\", "/")
             files_to_upload.append((local_path, s3_key))
 
     print(f"Found {len(files_to_upload)} files to upload.")
