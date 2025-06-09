@@ -12,6 +12,16 @@ cd bitmind-subnet
 
 ## ⚡️ Custom BitMind Dataset Generation Pipeline (V3 Update)
 
+### Running the Pipeline Robustly (Recommended)
+
+To ensure your dataset generation continues even if your terminal closes, run the entire script with pm2:
+
+```bash
+pm2 start run_dataset_gen.sh --interpreter bash --name dataset_gen_master
+```
+
+This will keep the script running in the background and process all datasets as configured.
+
 ### Important: Use the Custom Generation Pipeline
 
 To enable the new output structure, mask naming, and efficient generation logic, you **must replace the default BitMind subnet pipeline** with the custom version:
