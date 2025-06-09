@@ -134,3 +134,55 @@ Do not store tokens in Git.
    - Use A100 PCIE for video generation models
    - Use A40 for image generation models
    - Can utilize up to 10 GPUs on one host on RunPod (recommended)
+
+## Mask Generation and Mask Parameter Testing
+
+### Mask Generation Overview
+
+The BitMind dataset generation pipeline supports advanced mask generation for inpainting/image-to-image tasks. Masks are generated with a variety of shapes and parameters to simulate real-world user edits and AI-assisted retouching.
+
+#### Supported Mask Shapes
+- Rectangle
+- Circle
+- Ellipse
+- Triangle
+
+Each mask is randomly generated with configurable parameters for size, location, and shape. Multiple masks can be combined in a single image.
+
+#### Mask Parameters
+- `min_size_ratio`: Minimum mask size as a fraction of the smallest image dimension (e.g., 0.15).
+- `max_size_ratio`: Maximum mask size as a fraction of the smallest image dimension (e.g., 0.5).
+- `allow_multiple`: Whether to allow multiple masks per image.
+- `allowed_shapes`: List of shapes to use (rectangle, circle, ellipse, triangle).
+- `edge_bias`: Probability of placing masks near the image edge.
+
+#### Mask Metadata
+For each generated mask, metadata is saved including:
+- `shape`: The mask shape (rectangle, circle, ellipse, triangle)
+- `bbox`: The bounding box of the mask
+- For circles: `center`, `radius`
+- For triangles: `points` (list of 3 vertices)
+
+### Mask Parameter Testing Mode
+
+To systematically test the effect of different mask parameters and shapes, use the `--test_mask_randomization` flag:
+
+```bash
+python generate_synthetic_dataset.py ... --test_mask_randomization
+```
+
+This will:
+- Generate images using a grid of mask parameter settings (size, shape, location, etc.)
+- Save the generated images, masks, and a JSONL log of all mask parameters and metadata
+- Save the original (real) image with base augmentations applied for direct comparison
+
+#### Output Files in Test Mode
+- `<id>_masktest_<hash>.png`: The generated image
+- `<id>_masktest_<hash>_mask.png`: The mask image used for inpainting
+- `<id>_real_aug.png`: The real/augmented input image for comparison
+- `mask_generation_log.jsonl`: Log of all mask parameters and metadata for each generated image
+
+#### Standard Mode (No Test Flag)
+- Masks are generated with default/random parameters
+- Only the generated images (and optionally masks as `.npy`) are saved
+- No mask parameter log or real/augmented image is saved
