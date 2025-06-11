@@ -12,6 +12,7 @@ import numpy as np
 import torch
 from diffusers.utils import export_to_video
 from PIL import Image
+import cv2
 
 from bitmind.types import CacheConfig, ModelTask
 from bitmind.generation.util.image import create_random_mask, is_black_output
@@ -23,7 +24,6 @@ from bitmind.generation.util.model import (
 )
 from bitmind.generation.model_registry import ModelRegistry
 from bitmind.generation.models import initialize_model_registry
-from bitmind.transforms import apply_random_augmentations
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -72,8 +72,6 @@ class GenerationPipeline:
         self.prompt_generator = PromptGenerator(
             vlm_name=IMAGE_ANNOTATION_MODEL, llm_name=TEXT_MODERATION_MODEL
         )
-        self.model = None
-        self.current_model_name = None
 
     def generate(
         self,
@@ -96,15 +94,7 @@ class GenerationPipeline:
             ValueError: If image is None and cannot be sampled.
         """
         bt.logging.info(f"---------- Starting Generation ----------")
-        # Check if prompts are already present in image_samples
-        if tasks is None:
-            raise ValueError("tasks argument must be provided and not None")
-        if all('prompt' in sample and sample['prompt'] for sample in image_samples):
-            # Use existing prompts
-            prompts = {tasks[0]: {i: sample['prompt'] for i, sample in enumerate(image_samples)}}
-        else:
-            # Generate prompts if not present
-            prompts = self.generate_prompts(image_samples, downstream_tasks=tasks, clear_gpu=True)
+        prompts = self.generate_prompts(image_samples, downstream_tasks=tasks, clear_gpu=True)
         paths, stats = self.generate_media(prompts, model_names, image_samples, tasks)
 
         def log_stats(stats):
@@ -243,10 +233,6 @@ class GenerationPipeline:
                         else:
                             break
 
-                    # PATCH: Add the id from image_samples to gen_output
-                    if image_samples is not None and len(image_samples) > prompt_idx:
-                        gen_output['id'] = image_samples[prompt_idx].get('id')
-
                     bt.logging.info(
                         {
                             k: v
@@ -379,7 +365,7 @@ class GenerationPipeline:
             bt.logging.error(traceback.format_exc())
             return False
 
-    def _generate_media_with_model(self, model_name, prompt, image, mask_params=None):
+    def _generate_media_with_model(self, model_name, prompt, image):
         model_config = self.model_registry.get_model_dict(model_name)
         task = self.model_registry.get_task(model_name)
 
@@ -394,7 +380,6 @@ class GenerationPipeline:
 
         bt.logging.debug("Preparing generation arguments")
         gen_args = model_config.get("generate_args", {}).copy()
-        mask_metadata = None
 
         # prep inptask-specific generation args
         if task == "i2i":
@@ -405,10 +390,7 @@ class GenerationPipeline:
             if image.size[0] > target_size[0] or image.size[1] > target_size[1]:
                 image = image.resize(target_size, Image.Resampling.LANCZOS)
 
-            if mask_params is not None:
-                gen_args["mask_image"], mask_metadata = create_random_mask(image.size, **mask_params)
-            else:
-                gen_args["mask_image"], mask_metadata = create_random_mask(image.size)
+            gen_args["mask_image"] = create_random_mask(image.size)
             gen_args["image"] = image
 
         elif task == "i2v":
@@ -480,7 +462,6 @@ class GenerationPipeline:
             "model_name": model_name,
             "time": time.time(),
             "gen_duration": gen_time,
-            "mask_metadata": mask_metadata,
         }
         for k in ["num_inference_steps", "guidance_scale", "resolution"]:
             output[k] = gen_args.get(k, "")
@@ -490,7 +471,31 @@ class GenerationPipeline:
             output["source_image"] = source_image
 
         mask_image = gen_args.get("mask_image", None)
-        if mask_image is not None:
+        if mask_image is not None and modality == "image":
+            # Get generated image from gen_output
+            generated_img = None
+            if hasattr(gen_output, 'images') and gen_output.images:
+                generated_img = gen_output.images[0]
+            elif isinstance(gen_output, Image.Image):
+                generated_img = gen_output
+            if generated_img is not None:
+                if isinstance(generated_img, Image.Image):
+                    gen_img_np = np.array(generated_img)
+                else:
+                    gen_img_np = generated_img
+                if isinstance(mask_image, Image.Image):
+                    mask_np = np.array(mask_image)
+                else:
+                    mask_np = mask_image
+                # If mask is 3-channel, convert to single channel
+                if mask_np.ndim == 3 and mask_np.shape[2] == 3:
+                    mask_np = cv2.cvtColor(mask_np, cv2.COLOR_RGB2GRAY)
+                mask_resized = cv2.resize(mask_np, (gen_img_np.shape[1], gen_img_np.shape[0]), interpolation=cv2.INTER_NEAREST)
+                mask_image = Image.fromarray(mask_resized)
+                output["mask_image"] = mask_image
+            else:
+                output["mask_image"] = mask_image
+        elif mask_image is not None:
             output["mask_image"] = mask_image
 
         del self.model
@@ -524,9 +529,15 @@ class GenerationPipeline:
         media_type = media_sample["media_type"]
         model_name = media_sample["model_name"]
 
-        ouptput_dir = self.output_dir
+        ouptput_dir = (
+            CacheConfig(
+                base_dir=self.output_dir, modality=modality, media_type=media_type
+            ).get_path()
+            / model_name.split("/")[1]
+        )
+
         ouptput_dir.mkdir(parents=True, exist_ok=True)
-        base_path = ouptput_dir / str(media_sample["id"])
+        base_path = ouptput_dir / str(media_sample["time"])
         bt.logging.debug(f"[{modality}:{media_type}] Writing to cache")
 
         metadata = {
@@ -537,45 +548,16 @@ class GenerationPipeline:
 
         if modality == "image":
             save_path = str(base_path.with_suffix(".png"))
-            # Augment and resize image before saving
-            img_np = np.array(media_sample[modality].images[0])
-            img_aug, _, _ = apply_random_augmentations(img_np, (256, 256), level_probs={0: 1.0})
-            img_aug_pil = Image.fromarray(img_aug)
-            bt.logging.info(f"Saving augmented image of shape: {img_aug_pil.size}")
-            img_aug_pil.save(save_path)
+            media_sample[modality].images[0].save(save_path)
             if "mask_image" in media_sample:
-                mask_np = np.array(media_sample["mask_image"])
-                if mask_np.size == 0:
-                    bt.logging.warning(f"Mask is empty, skipping mask save.")
-                else:
-                    if mask_np.ndim == 1:
-                        side = int(np.sqrt(mask_np.shape[0]))
-                        if side * side != mask_np.shape[0]:
-                            bt.logging.warning(f"Mask shape {mask_np.shape} is not square, skipping mask save.")
-                        else:
-                            mask_np = mask_np.reshape((side, side))
-                    if mask_np.ndim == 3 and mask_np.shape[2] == 3:
-                        import cv2
-                        mask_np = cv2.cvtColor(mask_np, cv2.COLOR_RGB2GRAY)
-                    if mask_np.ndim == 2:
-                        mask_np = mask_np[..., None]  # Make it (H, W, 1)
-                    if mask_np.ndim != 3:
-                        bt.logging.error(f"Mask is not 3D after all conversions, shape: {mask_np.shape}")
-                    else:
-                        mask_aug, _, _ = apply_random_augmentations(mask_np, (256, 256), level_probs={0: 1.0})
-                        if mask_aug.ndim == 3 and mask_aug.shape[2] == 1:
-                            mask_aug = np.squeeze(mask_aug, axis=2)
-                        bt.logging.info(f"Saving augmented mask of shape: {mask_aug.shape}")
-                        mask_path = str(base_path.with_name(base_path.stem + "_mask.npy"))
-                        metadata["mask_path"] = mask_path
-                        np.save(mask_path, mask_aug)
+                mask_path = str(save_path).replace(".png", "_mask.npy")
+                metadata["mask_path"] = mask_path
+                np.save(mask_path, np.array(media_sample["mask_image"]))
         elif modality == "video":
             save_path = str(base_path.with_suffix(".mp4"))
             export_to_video(media_sample[modality].frames[0], save_path, fps=30)
-            if "mask_image" in media_sample:
-                mask_path = str(base_path.with_name(base_path.stem + "_mask.npy"))
-                metadata["mask_path"] = mask_path
-                np.save(mask_path, np.array(media_sample["mask_image"]))
+
+        base_path.with_suffix(".json").write_text(json.dumps(metadata))
 
         bt.logging.info(f"Wrote to {save_path}")
         return save_path
@@ -602,6 +584,9 @@ class GenerationPipeline:
         self.clear_gpu()
 
     def generate_from_prompt(self, prompt, task, image=None, model_name=None, generate_at_target_size=False, mask_params=None):
+        """
+        Dataset-specific helper for single prompt/image generation, compatible with dataset generation scripts.
+        """
         if model_name is None:
-            model_name = self.current_model_name or self.model_registry.select_random_model(task)
+            model_name = getattr(self, "current_model_name", None) or self.model_registry.select_random_model(task)
         return {"gen_output": self._generate_media_with_model(model_name, prompt, image, mask_params=mask_params)}
