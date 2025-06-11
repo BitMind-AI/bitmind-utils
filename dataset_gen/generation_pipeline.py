@@ -493,11 +493,10 @@ class GenerationPipeline:
                     mask_np = np.array(mask_image)
                 else:
                     mask_np = mask_image
-                # If mask is 3-channel, convert to single channel
-                if mask_np.ndim == 3 and mask_np.shape[2] == 3:
-                    mask_np = cv2.cvtColor(mask_np, cv2.COLOR_RGB2GRAY)
+                # Resize mask to size of generated image
                 mask_resized = cv2.resize(mask_np, (gen_img_np.shape[1], gen_img_np.shape[0]), interpolation=cv2.INTER_NEAREST)
-                mask_image = Image.fromarray(mask_resized)
+                # Ensure mask_resized is uint8 and single-channel
+                mask_image = Image.fromarray(mask_resized.astype(np.uint8), mode="L")
                 output["mask_image"] = mask_image
             else:
                 output["mask_image"] = mask_image
