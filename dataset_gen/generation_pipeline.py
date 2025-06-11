@@ -94,7 +94,13 @@ class GenerationPipeline:
             ValueError: If image is None and cannot be sampled.
         """
         bt.logging.info(f"---------- Starting Generation ----------")
-        prompts = self.generate_prompts(image_samples, downstream_tasks=tasks, clear_gpu=True)
+        # Only generate prompts if not already present
+        if all('prompt' in sample and sample['prompt'] for sample in image_samples):
+            # Use existing prompts, do NOT load annotation models
+            task = tasks[0] if isinstance(tasks, (list, tuple)) else tasks
+            prompts = {task: {i: sample['prompt'] for i, sample in enumerate(image_samples)}}
+        else:
+            prompts = self.generate_prompts(image_samples, downstream_tasks=tasks, clear_gpu=True)
         paths, stats = self.generate_media(prompts, model_names, image_samples, tasks)
 
         def log_stats(stats):
@@ -240,7 +246,7 @@ class GenerationPipeline:
                             if k not in (modality, "source_image", "mask_image")
                         }
                     )
-                    save_paths.append(self._save_media_and_metadata(gen_output))
+                    save_paths.append(self._save_media_and_metadata(gen_output, id=image_samples[prompt_idx].get('id') if image_samples is not None else None))
                     stats[model_name]["success"] += 1
                 except Exception as e:
                     bt.logging.error(f"Failed to either generate or save media: {e}")
@@ -524,40 +530,38 @@ class GenerationPipeline:
             )
         return model_names
 
-    def _save_media_and_metadata(self, media_sample):
+    def _save_media_and_metadata(self, media_sample, id=None):
         modality = media_sample["modality"]
         media_type = media_sample["media_type"]
         model_name = media_sample["model_name"]
 
-        ouptput_dir = (
-            CacheConfig(
-                base_dir=self.output_dir, modality=modality, media_type=media_type
-            ).get_path()
-            / model_name.split("/")[1]
-        )
-
-        ouptput_dir.mkdir(parents=True, exist_ok=True)
-        base_path = ouptput_dir / str(media_sample["time"])
-        bt.logging.debug(f"[{modality}:{media_type}] Writing to cache")
-
-        metadata = {
-            k: v
-            for k, v in media_sample.items()
-            if k not in (modality, "source_image", "mask_image")
-        }
+        # Use id for filename if provided, else fallback to old behavior
+        if id is not None:
+            output_dir = self.output_dir
+            output_dir.mkdir(parents=True, exist_ok=True)
+            base_path = output_dir / str(id)
+        else:
+            output_dir = (
+                CacheConfig(
+                    base_dir=self.output_dir, modality=modality, media_type=media_type
+                ).get_path()
+                / model_name.split("/")[1]
+            )
+            output_dir.mkdir(parents=True, exist_ok=True)
+            base_path = output_dir / str(media_sample["time"])
 
         if modality == "image":
             save_path = str(base_path.with_suffix(".png"))
             media_sample[modality].images[0].save(save_path)
             if "mask_image" in media_sample:
-                mask_path = str(save_path).replace(".png", "_mask.npy")
-                metadata["mask_path"] = mask_path
+                if id is not None:
+                    mask_path = str(output_dir / f"{id}_mask.npy")
+                else:
+                    mask_path = str(base_path).replace(".png", "_mask.npy")
                 np.save(mask_path, np.array(media_sample["mask_image"]))
         elif modality == "video":
             save_path = str(base_path.with_suffix(".mp4"))
             export_to_video(media_sample[modality].frames[0], save_path, fps=30)
-
-        base_path.with_suffix(".json").write_text(json.dumps(metadata))
 
         bt.logging.info(f"Wrote to {save_path}")
         return save_path

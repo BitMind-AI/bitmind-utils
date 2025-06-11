@@ -354,7 +354,6 @@ def save_generated_items(
     model_registry = initialize_model_registry()
     task = model_registry.get_task(synthetic_data_generator.model_name)
     modality = model_registry.get_modality(synthetic_data_generator.model_name)
-    
     model_config = model_registry.get_model(synthetic_data_generator.model_name)
 
     for json_filename in json_filenames:
@@ -389,31 +388,24 @@ def save_generated_items(
             image=image,
             generate_at_target_size=False
         )
-
-        # --- DEBUG: Log result keys/type ---
-        logging.info(f"Processing annotation {name}, result type: {type(result)}, keys: {list(result.keys()) if isinstance(result, dict) else 'N/A'}, full result: {result}")
-        if isinstance(result, dict) and 'gen_output' in result:
-            logging.info(f"gen_output type: {type(result['gen_output'])}, dir: {dir(result['gen_output'])}")
-
-        # Handle different output types
-        if modality == 'video':
-            filename = f"{name}.mp4"
-            file_path = os.path.join(output_dir, filename)
-            if 'gen_output' in result and hasattr(result['gen_output'], 'frames'):
-                # Get fps from model config, default to 8 if not specified
-                fps = model_config.get('save_args', {}).get('fps', 8)
-                print(f"Saving video with {fps} fps based on model configuration")
-                export_to_video(result['gen_output'].frames[0], file_path, fps=fps)
-                total_items += 1
-        else:  # image output
-            filename = f"{name}.png"
-            file_path = os.path.join(output_dir, filename)
-            retry_count = 0
-            max_retries = 3
-            while retry_count < max_retries:
-                # All image/mask saving and augmentation is now handled in the generation pipeline.
-                # Only handle metadata or result processing here if needed.
-                break
+        # --- Apply deterministic (level 0) augmentations to image and mask ---
+        if modality == 'image':
+            img_path = os.path.join(output_dir, f"{name}.png")
+            mask_path = os.path.join(output_dir, f"{name}_mask.npy")
+            # Load image
+            if os.path.exists(img_path):
+                img = np.array(Image.open(img_path))
+                mask = np.load(mask_path) if os.path.exists(mask_path) else None
+                aug_img, aug_mask, _, _ = apply_random_augmentations(
+                    img,
+                    target_image_size=img.shape[:2][::-1],
+                    mask=mask,
+                    level_probs={0: 1.0}
+                )
+                Image.fromarray(aug_img).save(img_path)
+                if aug_mask is not None:
+                    np.save(mask_path, aug_mask)
+        total_items += 1
 
     return total_items
 
