@@ -1,5 +1,4 @@
 import argparse
-import logging
 import json
 import os
 import torch
@@ -15,6 +14,7 @@ import io
 import numpy as np
 import jsonlines
 import cv2
+from glob import glob
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -33,19 +33,11 @@ from bitmind.generation.prompt_generator import PromptGenerator
 from bitmind.generation.generation_pipeline import GenerationPipeline, IMAGE_ANNOTATION_MODEL, TEXT_MODERATION_MODEL
 from bitmind.generation.models import initialize_model_registry
 from bitmind.transforms import apply_random_augmentations
+from bitmind.generation.util.image import ensure_mask_3d
 
 TARGET_IMAGE_SIZE = (256, 256)
 PROGRESS_INCREMENT = 10
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("generation_debug.log"),
-        logging.StreamHandler()
-    ]
-)
-logging.info("=== PYTHON LOGGER TEST: Script started ===")
 
 def parse_arguments():
     """Parse command-line arguments for generating synthetic images and annotations.
@@ -342,125 +334,6 @@ def generate_and_save_annotations(
     )
 
 
-def save_generated_items(
-    json_filenames,
-    annotations_dir,
-    synthetic_data_generator,
-    output_dir,
-    real_images_dir,
-):
-    """Save generated items (images or videos) from annotations."""
-    total_items = 0
-    model_registry = initialize_model_registry()
-    task = model_registry.get_task(synthetic_data_generator.model_name)
-    modality = model_registry.get_modality(synthetic_data_generator.model_name)
-    model_config = model_registry.get_model(synthetic_data_generator.model_name)
-
-    for json_filename in json_filenames:
-        json_path = os.path.join(annotations_dir, json_filename)
-        with open(json_path, 'r') as file:
-            annotation = json.load(file)
-        prompt = annotation['description']
-        name = annotation['id']
-
-        # Handle i2i and i2v cases by loading source image
-        image = None
-        if task in ['i2i', 'i2v']:
-            # Try to find the image with any common extension
-            possible_exts = ['png', 'jpg', 'jpeg']
-            found = False
-            for ext in possible_exts:
-                source_image_path = os.path.join(real_images_dir, f"{name}.{ext}")
-                if os.path.exists(source_image_path):
-                    image = Image.open(source_image_path)
-                    if image.mode != 'RGB':
-                        image = image.convert('RGB')
-                    found = True
-                    break
-            if not found:
-                print(f"Source image not found for {task}: {os.path.join(real_images_dir, f'{name}.*')}")
-                continue
-
-        # Use generate_from_prompt for all tasks
-        result = synthetic_data_generator.generate_from_prompt(
-            prompt=prompt,
-            task=task,
-            image=image,
-            generate_at_target_size=False
-        )
-        # --- Apply deterministic (level 0) augmentations to image and mask ---
-        if modality == 'image':
-            img_path = os.path.join(output_dir, f"{name}.png")
-            mask_path = os.path.join(output_dir, f"{name}_mask.npy")
-            # Load image
-            if os.path.exists(img_path):
-                img = np.array(Image.open(img_path))
-                mask = np.load(mask_path) if os.path.exists(mask_path) else None
-                aug_img, aug_mask, _, _ = apply_random_augmentations(
-                    img,
-                    target_image_size=img.shape[:2][::-1],
-                    mask=mask,
-                    level_probs={0: 1.0}
-                )
-                Image.fromarray(aug_img).save(img_path)
-                if aug_mask is not None:
-                    np.save(mask_path, aug_mask)
-        total_items += 1
-
-    return total_items
-
-
-def generate_and_save_synthetic_items(
-    annotations_dir,
-    synthetic_data_generator,
-    output_dir,
-    real_images_dir,
-    start_index,
-    end_index,
-    batch_size=16,
-):
-    """Generate and save synthetic items (images or videos) from annotations."""
-    start_time = time.time()
-    total_items = 0
-
-    # Collect all valid annotation file paths first
-    valid_files = []
-    for json_filename in sorted(os.listdir(annotations_dir)):
-        try:
-            file_index = int(json_filename[:-5])
-        except ValueError:
-            continue
-        if start_index <= file_index <= end_index:
-            valid_files.append(json_filename)
-
-    total_valid_files = len(valid_files)
-    progress_interval = (
-        batch_size * ceil(total_valid_files / (PROGRESS_INCREMENT * batch_size))
-    )
-
-    with torch.no_grad():
-        for i in range(0, total_valid_files, batch_size):
-            batch_files = valid_files[i:i+batch_size]
-            total_items += save_generated_items(
-                batch_files,
-                annotations_dir,
-                synthetic_data_generator,
-                output_dir,
-                real_images_dir,
-            )
-
-            if i % progress_interval == 0 or total_items >= total_valid_files:
-                print(
-                    f"Progress: {total_items}/{total_valid_files} items generated "
-                    f"({(total_items / total_valid_files) * 100:.2f}%)"
-                )
-
-    synthetic_data_generator.clear_gpu()
-    duration = time.time() - start_time
-    print(f"All {total_items} synthetic items generated in {duration:.2f} seconds.")
-    print(f"Mean generation time: {duration/max(total_items, 1):.2f} seconds.")
-    
-
 def build_image_samples(annotations_chunk_dir: Path, model_registry, args, dataset=None) -> list:
     """Build image_samples list for generation, handling i2i/i2v preprocessing."""
     image_samples = []
@@ -512,6 +385,29 @@ def run_generation_pipeline(args, model_registry, output_dir, annotations_chunk_
         model_names=[args.diffusion_model]
     )
     print(f"Generation complete. Outputs saved to {output_dir}")
+
+def augment_and_overwrite_images_and_masks(output_dir):
+    """Augment and overwrite all images and masks in output_dir to TARGET_IMAGE_SIZE using level 0 augmentations."""
+    image_paths = glob(os.path.join(output_dir, '*.png'))
+    print(f"[AUGMENT] Found {len(image_paths)} images in {output_dir}")
+    for img_path in image_paths:
+        name = os.path.splitext(os.path.basename(img_path))[0]
+        mask_path = os.path.join(output_dir, f"{name}_mask.npy")
+        img = np.array(Image.open(img_path))
+        mask = np.load(mask_path) if os.path.exists(mask_path) else None
+        if mask is not None and hasattr(mask, 'ndim') and mask.ndim == 2:
+            mask = ensure_mask_3d(mask)
+        aug_img, aug_mask, _, _ = apply_random_augmentations(
+            img,
+            target_image_size=TARGET_IMAGE_SIZE,
+            mask=mask,
+            level_probs={0: 1.0}
+        )
+        Image.fromarray(aug_img).save(img_path)
+        if aug_mask is not None:
+            if aug_mask.ndim == 3 and aug_mask.shape[2] == 1:
+                aug_mask = np.squeeze(aug_mask, axis=2)
+            np.save(mask_path, aug_mask)
 
 def main():
     args = parse_arguments()
@@ -595,6 +491,7 @@ def main():
         output_dir = Path(f'test_data/synthetic_images/{model_name}/{args.real_image_dataset_name}/{args.start_index}_{args.end_index}')
         output_dir.mkdir(parents=True, exist_ok=True)
         run_generation_pipeline(args, model_registry, output_dir, annotations_chunk_dir, real_images_chunk_dir, dataset)
+        augment_and_overwrite_images_and_masks(output_dir)
 
 
 if __name__ == "__main__":
