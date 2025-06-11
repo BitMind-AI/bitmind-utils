@@ -17,6 +17,9 @@ def mask_to_polygons(mask_path):
         mask = np.squeeze(mask, axis=2)
     if len(mask.shape) == 3:
         mask = cv2.cvtColor(mask, cv2.COLOR_RGB2GRAY)
+    # Mask is 0/1, scale to 0/255 for visualization/contours
+    if mask.max() == 1:
+        mask = mask * 255
     _, binary_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
     contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     polygons = []

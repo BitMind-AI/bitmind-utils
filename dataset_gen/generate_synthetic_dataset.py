@@ -350,7 +350,10 @@ def build_image_samples(annotations_chunk_dir: Path, model_registry, args, datas
             if task in ['i2i', 'i2v']:
                 possible_exts = ['png', 'jpg', 'jpeg']
                 for ext in possible_exts:
-                    real_img_path = os.path.join(f'test_data/real_images/{args.real_image_dataset_name}/{args.start_index}_{args.end_index}', f"{idx}.{ext}")
+                    real_img_path = os.path.join(
+                        f'test_data/real_images/{args.real_image_dataset_name}/{args.start_index}_{args.end_index}',
+                        f"{idx}.{ext}"
+                    )
                     if os.path.exists(real_img_path):
                         image = Image.open(real_img_path)
                         if image.mode != 'RGB':
@@ -491,7 +494,7 @@ def main():
         output_dir = Path(f'test_data/synthetic_images/{model_name}/{args.real_image_dataset_name}/{args.start_index}_{args.end_index}')
         output_dir.mkdir(parents=True, exist_ok=True)
         run_generation_pipeline(args, model_registry, output_dir, annotations_chunk_dir, real_images_chunk_dir, dataset)
-        augment_and_overwrite_images_and_masks(output_dir)
+        #augment_and_overwrite_images_and_masks(output_dir)
 
 
 if __name__ == "__main__":

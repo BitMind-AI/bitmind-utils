@@ -558,7 +558,9 @@ class GenerationPipeline:
                     mask_path = str(output_dir / f"{id}_mask.npy")
                 else:
                     mask_path = str(base_path).replace(".png", "_mask.npy")
-                np.save(mask_path, np.array(media_sample["mask_image"]))
+                mask_arr = np.array(media_sample["mask_image"])
+                mask_arr = (mask_arr > 0).astype(np.uint8)
+                np.save(mask_path, mask_arr)
         elif modality == "video":
             save_path = str(base_path.with_suffix(".mp4"))
             export_to_video(media_sample[modality].frames[0], save_path, fps=30)
