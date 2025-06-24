@@ -12,7 +12,6 @@ import requests
 import imghdr
 import io
 import numpy as np
-import jsonlines
 import cv2
 from glob import glob
 
@@ -491,7 +490,10 @@ def main():
         prompt_generator.clear_gpu()
         images_chunk = None
     if args.generate_synthetic_images:
-        output_dir = Path(f'test_data/synthetic_images/{model_name}/{args.real_image_dataset_name}/{args.start_index}_{args.end_index}')
+        if task in ['t2v', 'i2v']:
+            output_dir = Path(f'test_data/synthetic_videos/{model_name}/{args.real_image_dataset_name}/{args.start_index}_{args.end_index}')
+        else:
+            output_dir = Path(f'test_data/synthetic_images/{model_name}/{args.real_image_dataset_name}/{args.start_index}_{args.end_index}')
         output_dir.mkdir(parents=True, exist_ok=True)
         run_generation_pipeline(args, model_registry, output_dir, annotations_chunk_dir, real_images_chunk_dir, dataset)
         #augment_and_overwrite_images_and_masks(output_dir)

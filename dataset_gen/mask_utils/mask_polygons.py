@@ -8,7 +8,7 @@ import argparse
 # CONFIGURATION
 LOCAL_DATASETS_ROOT = "/workspace/bitmind-utils/dataset_gen/test_data/synthetic_images/dreamshaper-8-inpainting"  # or the parent directory containing all datasets
 S3_BUCKET = "subnet-34-storage"
-S3_PREFIX = "semisynthetics"  # or whatever your S3 prefix is
+S3_PREFIX = "segmentation"  # or whatever your S3 prefix is
 
 def mask_to_polygons(mask_path):
     mask = np.load(mask_path)
@@ -49,8 +49,20 @@ def process_image_mask_pair(args_tuple):
     img_path, mask_path = args_tuple
     polygons = mask_to_polygons(mask_path)
     s3_uri = local_path_to_s3_uri(img_path)
+    # Add original image S3 URI
+    # Determine dataset_name and filename from img_path
+    rel_path = os.path.relpath(img_path, LOCAL_DATASETS_ROOT)
+    parts = rel_path.split(os.sep)
+    if len(parts) >= 2:
+        dataset_name = parts[0]
+        filename = parts[-1]
+    else:
+        dataset_name = os.path.basename(LOCAL_DATASETS_ROOT)
+        filename = rel_path
+    original_image_s3_uri = f"s3://{S3_BUCKET}/{S3_PREFIX}/real_images/{dataset_name}/{filename}"
     return {
         "image-uri": s3_uri,
+        "original-image-uri": original_image_s3_uri,
         "polygons": polygons
     }
 
@@ -76,13 +88,14 @@ def main():
     args = parser.parse_args()
     workers = args.workers
     # For each dataset (e.g., dreamshaper-8-inpainting, stable-diffusion-xl-1.0-inpainting-0.1, etc.)
+    model_name = os.path.basename(LOCAL_DATASETS_ROOT)
     for dataset_name in os.listdir(LOCAL_DATASETS_ROOT):
         dataset_path = os.path.join(LOCAL_DATASETS_ROOT, dataset_name)
         if not os.path.isdir(dataset_path):
             continue
         print(f"Processing dataset: {dataset_name}")
         dataset_json = process_dataset(dataset_path, workers=workers)
-        out_json_path = f"{dataset_name}.json"
+        out_json_path = f"{model_name}_{dataset_name}.json"
         with open(out_json_path, "w") as f:
             json.dump(dataset_json, f, indent=2)
         print(f"Wrote {len(dataset_json)} entries to {out_json_path}")

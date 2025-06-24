@@ -63,7 +63,7 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
     fi
 
     # Calculate indices per GPU (across all 30 GPUs)
-    TOTAL_GPUS=10
+    TOTAL_GPUS=$NUM_GPUS
     INDICES_PER_GPU=$(( ($DATASET_SIZE + $TOTAL_GPUS - 1) / $TOTAL_GPUS ))
     
     # Array to store job names for waiting
