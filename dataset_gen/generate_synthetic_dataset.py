@@ -26,7 +26,7 @@ from utils.hugging_face_utils import (
     save_as_json,
     upload_videos_as_files
 )
-from utils.batch_prompt_utils import batch_process_dataset
+from generation_utils.batch_prompt_utils import batch_process_dataset
 from diffusers.utils import export_to_video
 from bitmind.generation.prompt_generator import PromptGenerator
 from bitmind.generation.generation_pipeline import GenerationPipeline, IMAGE_ANNOTATION_MODEL, TEXT_MODERATION_MODEL

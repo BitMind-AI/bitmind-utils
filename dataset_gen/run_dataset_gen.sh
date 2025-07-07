@@ -28,6 +28,10 @@ DATASETS=(
 NUM_GPUS=10
 START_GPU=0
 
+# Set the starting index for generation
+GENERATION_START_INDEX=2000  # Start from index 2000
+GENERATION_COUNT=2000        # Generate 2000 images
+
 # Define dataset aliases
 declare -A DATASET_ALIASES=(
     ["bm-real"]="bm"
@@ -42,8 +46,6 @@ declare -A DATASET_ALIASES=(
     ["idoc-mugshots-images"]="mug"
 )
 
-MAX_GENERATIONS=5000  # Set your global cap
-
 # Configurable split for annotation loading
 SPLIT=""  # Change this to your desired split (e.g., 'train', 't2i', 't2v', etc.)
 
@@ -57,14 +59,19 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
     DATASET_SIZE=$(python -c "from datasets import load_dataset; print(len(load_dataset('sn34-test/${DATASET}___annotations', split='$SPLIT')))")
     echo "Dataset size: $DATASET_SIZE"
     
-    # Cap DATASET_SIZE to MAX_GENERATIONS
-    if [ "$DATASET_SIZE" -gt "$MAX_GENERATIONS" ]; then
-        DATASET_SIZE=$MAX_GENERATIONS
+    # Check if we have enough data starting from GENERATION_START_INDEX
+    AVAILABLE_INDICES=$(( DATASET_SIZE - GENERATION_START_INDEX ))
+    if [ "$AVAILABLE_INDICES" -lt "$GENERATION_COUNT" ]; then
+        echo "Warning: Only $AVAILABLE_INDICES indices available starting from $GENERATION_START_INDEX"
+        echo "Adjusting generation count to $AVAILABLE_INDICES"
+        ACTUAL_GENERATION_COUNT=$AVAILABLE_INDICES
+    else
+        ACTUAL_GENERATION_COUNT=$GENERATION_COUNT
     fi
 
-    # Calculate indices per GPU (across all 30 GPUs)
+    # Calculate indices per GPU (across all GPUs)
     TOTAL_GPUS=$NUM_GPUS
-    INDICES_PER_GPU=$(( ($DATASET_SIZE + $TOTAL_GPUS - 1) / $TOTAL_GPUS ))
+    INDICES_PER_GPU=$(( ($ACTUAL_GENERATION_COUNT + $TOTAL_GPUS - 1) / $TOTAL_GPUS ))
     
     # Array to store job names for waiting
     declare -a JOB_NAMES=()
@@ -72,12 +79,19 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
     # Launch jobs for each GPU on this host
     for ((local_gpu=0; local_gpu<$NUM_GPUS; local_gpu++)); do
         global_gpu=$(( local_gpu + START_GPU ))
-        START_INDEX=$(( global_gpu * INDICES_PER_GPU ))
+        START_INDEX=$(( GENERATION_START_INDEX + global_gpu * INDICES_PER_GPU ))
         END_INDEX=$(( START_INDEX + INDICES_PER_GPU - 1 ))
         
-        # Ensure END_INDEX doesn't exceed dataset size
-        if [ $END_INDEX -ge $DATASET_SIZE ]; then
-            END_INDEX=$(( DATASET_SIZE - 1 ))
+        # Ensure END_INDEX doesn't exceed the actual generation range
+        MAX_END_INDEX=$(( GENERATION_START_INDEX + ACTUAL_GENERATION_COUNT - 1 ))
+        if [ $END_INDEX -gt $MAX_END_INDEX ]; then
+            END_INDEX=$MAX_END_INDEX
+        fi
+        
+        # Skip if START_INDEX is beyond our generation range
+        if [ $START_INDEX -gt $MAX_END_INDEX ]; then
+            echo "Skipping GPU $local_gpu - START_INDEX $START_INDEX exceeds generation range"
+            continue
         fi
         
         # Create a shorter custom name for the repository to avoid length issues
@@ -110,7 +124,7 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
             --end_index $END_INDEX \
             --gpu_id $local_gpu \
             --output_repo_name "$CUSTOM_REPO_NAME" \
-            --max_images $INDICES_PER_GPU
+            --max_images $(( END_INDEX - START_INDEX + 1 ))
             
         # Add a small delay to prevent overwhelming the system
         sleep 2
