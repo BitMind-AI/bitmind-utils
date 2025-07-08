@@ -34,8 +34,6 @@ for idx in "${!REAL_DATASETS[@]}"; do
         --hf_org 'bitmind' \
         --target_org 'sn34-test' \
         --real_image_dataset_name "$dataset_name" \
-        --diffusion_model "stabilityai/stable-diffusion-xl-base-1.0" \
-        --upload_annotations \
         --private \
         --hf_token "$HF_TOKEN" \
         --start_index 0 \

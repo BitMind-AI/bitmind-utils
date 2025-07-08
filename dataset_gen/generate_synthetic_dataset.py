@@ -46,37 +46,14 @@ def parse_arguments():
 
     Do not add token as Git credential.
 
-    Example Usage:
-
-    Generate the first 10 mirrors of celeb-a-hq with stabilityai/stable-diffusion-xl-base-1.0
-    and existing annotations from Hugging Face, and upload images to Hugging Face.
-    Replace YOUR_HF_TOKEN with your actual Hugging Face API token:
-
-    pm2 start generate_synthetic_dataset.py --name "first_ten_celebahq" --no-autorestart \
-    -- --hf_org 'bitmind' --real_image_dataset_name 'celeb-a-hq' \
-    --diffusion_model 'stabilityai/stable-diffusion-xl-base-1.0' --upload_synthetic_images \
-    --hf_token 'YOUR_HF_TOKEN' --start_index 0 --end_index 10 --gpu_id 0
-
-    Generate mirrors of the entire ffhq256 using stabilityai/stable-diffusion-xl-base-1.0
-    and upload annotations and images to Hugging Face. Replace YOUR_HF_TOKEN with your
-    actual Hugging Face API token:
-
-    pm2 start generate_synthetic_dataset.py --name "ffhq256" --no-autorestart \
-    -- --hf_org "bitmind" --real_image_dataset_name "ffhq256" \
-    --diffusion_model "stabilityai/stable-diffusion-xl-base-1.0" \
-    --upload_annotations --upload_synthetic_images --hf_token "YOUR_HF_TOKEN" \
-    --gpu_id 0 --download_real_images
-
     Arguments:
         --hf_org (str): Required. Hugging Face organization name.
         --real_image_dataset_name (str): Required. Name of the real image dataset.
         --diffusion_model (str): Required. Diffusion model to use for image generation.
-        --upload_annotations (bool): Optional. Flag to upload annotations to Hugging Face.
         --download_annotations (bool): Optional. Flag to download existing annotations.
         --skip_generate_annotations (bool): Optional. Flag to skip local annotation generation.
                                         Useful when local annotations exist.
         --generate_synthetic_images (bool): Optional. Flag to generate synthetic images.
-        --upload_synthetic_images (bool): Optional. Flag to upload synthetic images.
         --hf_token (str): Required for interfacing with Hugging Face.
         --start_index (int): Required. Start index (inclusive) for processing the dataset.
         --end_index (int): Optional. End index (inclusive) for processing the dataset.
@@ -105,8 +82,9 @@ def parse_arguments():
     parser.add_argument(
         '--diffusion_model',
         type=str,
-        required=True,
-        help='Diffusion model to use for image generation.'
+        required=False,
+        default="stabilityai/stable-diffusion-xl-base-1.0",
+        help='Diffusion model to use for image generation. Only needed if --generate_synthetic_images is specified.'
     )
     parser.add_argument(
         '--download_annotations',
@@ -282,6 +260,7 @@ def generate_and_save_annotations(
     dataset_name,
     prompt_generator,
     annotations_dir,
+    args,
     batch_size=16
 ):
     annotations_batch = []
@@ -304,7 +283,7 @@ def generate_and_save_annotations(
             annotation = {
                 "id": adjusted_index,
                 "dataset": dataset_name,
-                "description": prompt_generator.generate(real_image['image'], task=args.annotation_task)
+                "description": prompt_generator.generate(real_image['image'], downstream_task=args.annotation_task)
             }
 
             annotations_batch.append((adjusted_index, annotation))
@@ -486,10 +465,13 @@ def main():
         dataset = load_dataset(hf_dataset_name, split='train')
         images_chunk = slice_dataset(dataset, start_index=args.start_index, end_index=args.end_index)
         dataset = None
-        generate_and_save_annotations(images_chunk, args.start_index, hf_dataset_name, prompt_generator, annotations_chunk_dir, batch_size)
+        generate_and_save_annotations(images_chunk, args.start_index, hf_dataset_name, prompt_generator, annotations_chunk_dir, args, batch_size)
         prompt_generator.clear_gpu()
         images_chunk = None
     if args.generate_synthetic_images:
+        if not args.diffusion_model:
+            raise ValueError("--diffusion_model is required when --generate_synthetic_images is specified")
+            
         if task in ['t2v', 'i2v']:
             output_dir = Path(f'test_data/synthetic_videos/{model_name}/{args.real_image_dataset_name}/{args.start_index}_{args.end_index}')
         else:
