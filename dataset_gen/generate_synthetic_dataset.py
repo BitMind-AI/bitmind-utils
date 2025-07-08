@@ -19,7 +19,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
 from datasets import load_dataset
-from utils.hugging_face_utils import (
+from dataset_utils.hugging_face_utils import (
     dataset_exists_on_hf,
     load_and_sort_dataset,
     slice_dataset,

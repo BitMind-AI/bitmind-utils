@@ -16,7 +16,9 @@ REAL_DATASETS=(
     "idoc-mugshots-images"
 )
 NUM_GPUS=10
-MAX_IMAGES=20000  # Set your desired maximum here
+START_INDEX=0
+END_INDEX=9999
+MAX_IMAGES=10000  # Set your desired maximum here
 
 # Hugging Face API Token
 if [ -z "$1" ]; then
@@ -36,7 +38,8 @@ for idx in "${!REAL_DATASETS[@]}"; do
         --real_image_dataset_name "$dataset_name" \
         --private \
         --hf_token "$HF_TOKEN" \
-        --start_index 0 \
+        --start_index $START_INDEX \
+        --end_index $END_INDEX \
         --gpu_id $gpu_id \
         --annotation_task t2i \
         --max_images $MAX_IMAGES
