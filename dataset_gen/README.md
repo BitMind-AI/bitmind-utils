@@ -10,22 +10,61 @@ cd bitmind-subnet
 # https://medium.com/bitmindlabs/start-mining-on-the-bitmind-subnet-step-by-step-runpod-tutorial-848bfa0517df
 ```
 
-2. **File Integration**
-```bash
-# Copy files from dataset_gen to synthetic_data_generation
-cp -r /path/to/bitmind-utils/dataset_gen/* /path/to/bitmind-subnet/bitmind/synthetic_data_generation/
+## ⚡️ Custom BitMind Dataset Generation Pipeline (V3 Update)
 
-# Copy utils directory to bitmind/
-cp -r /path/to/bitmind-utils/utils /path/to/bitmind-subnet/bitmind/
+### Running the Pipeline Robustly (Recommended)
+
+To ensure your dataset generation continues even if your terminal closes, run the entire script with pm2:
+
+```bash
+pm2 start run_dataset_gen.sh --interpreter bash --name dataset_gen_master --no-autorestart -- YOUR_HF_TOKEN
 ```
 
-3. **Update Synthetic Data Generator**
-- Add the `generate_from_prompt` function from `synthetic_data_generator.py` to BitMind subnet's synthetic data generator.
+This will keep the script running in the background and process all datasets as configured.
 
-4. **Reinstall Requirements**
+### Important: Use the Custom Generation Pipeline
+
+To enable the new output structure, mask naming, and efficient generation logic, you **must replace the default BitMind subnet pipeline** with the custom version:
+
 ```bash
-pip install -e .
+cp ./bitmind-utils/dataset_gen/generation_pipeline.py ./bitmind-subnet/bitmind/generation/generation_pipeline.py
 ```
+
+This ensures:
+- Output files (images, videos, masks) are saved directly in the chunk directory (e.g., `.../synthetic_images/model/dataset/0_499/0.png`)
+- Masks are named `<id>_mask.npy` and paired with their respective images/videos
+- No per-sample `.json` files are written; if you need metadata, collect it into a single `.jsonl` file after generation
+- The pipeline will **not load BLIP2** if you provide pre-generated prompts/annotations
+
+### New Workflow: `generate_synthetic_dataset.py`
+
+- This script orchestrates the full dataset generation process:
+  1. Downloads or generates annotations (prompts)
+  2. Prepares image samples (with or without prompts)
+  3. Runs the custom `GenerationPipeline` for efficient batch generation
+  4. Outputs are saved with clean, flat naming in the chunk directory
+
+#### Using Pre-Generated Annotations/Prompts
+- If your annotation JSONs already contain prompts, the pipeline will **skip BLIP2 loading** and use your prompts directly (saves GPU memory and time)
+- This is ideal for large-scale or multi-GPU runs
+
+#### Output Structure Example
+```
+synthetic_images/model_name/dataset_name/0_499/0.png
+synthetic_images/model_name/dataset_name/0_499/0_mask.npy
+synthetic_images/model_name/dataset_name/0_499/1.png
+synthetic_images/model_name/dataset_name/0_499/1_mask.npy
+...etc
+```
+
+#### Collecting Metadata
+- No per-sample `.json` files are written by default
+- If you need a `.jsonl` file, you can post-process the output directory to collect all metadata into a single file
+
+### Troubleshooting & Best Practices
+- **GPU Memory:** Only run one generation job per GPU at a time. BLIP2 is only loaded if prompts are missing.
+- **Prompt Generation:** For large datasets, generate prompts/annotations first, then run generation jobs using those prompts.
+- **Custom Logic:** Always ensure you are using the patched `generation_pipeline.py` in your BitMind subnet for the new logic to take effect.
 
 ## Tool Overview
 
@@ -105,3 +144,55 @@ Do not store tokens in Git.
    - Use A100 PCIE for video generation models
    - Use A40 for image generation models
    - Can utilize up to 10 GPUs on one host on RunPod (recommended)
+
+## Mask Generation and Mask Parameter Testing
+
+### Mask Generation Overview
+
+The BitMind dataset generation pipeline supports advanced mask generation for inpainting/image-to-image tasks. Masks are generated with a variety of shapes and parameters to simulate real-world user edits and AI-assisted retouching.
+
+#### Supported Mask Shapes
+- Rectangle
+- Circle
+- Ellipse
+- Triangle
+
+Each mask is randomly generated with configurable parameters for size, location, and shape. Multiple masks can be combined in a single image.
+
+#### Mask Parameters
+- `min_size_ratio`: Minimum mask size as a fraction of the smallest image dimension (e.g., 0.15).
+- `max_size_ratio`: Maximum mask size as a fraction of the smallest image dimension (e.g., 0.5).
+- `allow_multiple`: Whether to allow multiple masks per image.
+- `allowed_shapes`: List of shapes to use (rectangle, circle, ellipse, triangle).
+- `edge_bias`: Probability of placing masks near the image edge.
+
+#### Mask Metadata
+For each generated mask, metadata is saved including:
+- `shape`: The mask shape (rectangle, circle, ellipse, triangle)
+- `bbox`: The bounding box of the mask
+- For circles: `center`, `radius`
+- For triangles: `points` (list of 3 vertices)
+
+### Mask Parameter Testing Mode
+
+To systematically test the effect of different mask parameters and shapes, use the `--test_mask_randomization` flag:
+
+```bash
+python generate_synthetic_dataset.py ... --test_mask_randomization
+```
+
+This will:
+- Generate images using a grid of mask parameter settings (size, shape, location, etc.)
+- Save the generated images, masks, and a JSONL log of all mask parameters and metadata
+- Save the original (real) image with base augmentations applied for direct comparison
+
+#### Output Files in Test Mode
+- `<id>_masktest_<hash>.png`: The generated image
+- `<id>_masktest_<hash>_mask.png`: The mask image used for inpainting
+- `<id>_real_aug.png`: The real/augmented input image for comparison
+- `mask_generation_log.jsonl`: Log of all mask parameters and metadata for each generated image
+
+#### Standard Mode (No Test Flag)
+- Masks are generated with default/random parameters
+- Only the generated images (and optionally masks as `.npy`) are saved
+- No mask parameter log or real/augmented image is saved

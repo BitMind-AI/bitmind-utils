@@ -10,7 +10,7 @@ from PIL import Image
 import bittensor as bt
 from transformers import logging as transformers_logging
 
-def batch_process_dataset(dataset, start_index, dataset_name, prompt_generator, annotations_dir, batch_size=16):
+def batch_process_dataset(dataset, start_index, dataset_name, prompt_generator, annotations_dir, batch_size=16, annotation_task='t2i'):
     """
     Process a dataset in batches, generating and saving annotations.
     Uses a two-phase approach to minimize model loading/unloading:
@@ -24,6 +24,7 @@ def batch_process_dataset(dataset, start_index, dataset_name, prompt_generator, 
         prompt_generator: PromptGenerator instance to use
         annotations_dir: Directory to save annotations
         batch_size: Size of batches to process
+        annotation_task: Task type for processing descriptions
         
     Returns:
         Number of images processed
@@ -49,6 +50,7 @@ def batch_process_dataset(dataset, start_index, dataset_name, prompt_generator, 
     chunk_size = min(1000, total_images)  # Process up to 1000 images at a time
     
     for chunk_start in range(0, total_images, chunk_size):
+        chunk_timer_start = time.time()
         chunk_end = min(chunk_start + chunk_size, total_images)
         print(f"Processing chunk {chunk_start//chunk_size + 1}/{ceil(total_images/chunk_size)} ({chunk_start}-{chunk_end-1})")
         
@@ -78,8 +80,7 @@ def batch_process_dataset(dataset, start_index, dataset_name, prompt_generator, 
         # Load VLM once for this chunk
         original_device = prompt_generator.device
         print(f"Loading VLM model {prompt_generator.vlm_name} on {original_device}")
-        prompt_generator.vlm_processor = prompt_generator._load_vlm_processor()
-        prompt_generator.vlm = prompt_generator._load_vlm()
+        prompt_generator.load_vlm()
         
         # Process all images in batches
         raw_descriptions = []
@@ -139,13 +140,7 @@ def batch_process_dataset(dataset, start_index, dataset_name, prompt_generator, 
         
         # Clear VLM from memory
         print("Unloading VLM from GPU memory")
-        prompt_generator.vlm.to('cpu')
-        del prompt_generator.vlm
-        prompt_generator.vlm = None
-        del prompt_generator.vlm_processor
-        prompt_generator.vlm_processor = None
-        gc.collect()
-        torch.cuda.empty_cache()
+        prompt_generator.clear_gpu()
         
         # PHASE 2: Process all descriptions with LLM
         print(f"PHASE 2: Processing descriptions with LLM...")
@@ -153,7 +148,7 @@ def batch_process_dataset(dataset, start_index, dataset_name, prompt_generator, 
         # Load LLM once for this chunk
         print(f"Loading LLM model {prompt_generator.llm_name} on {original_device}")
         try:
-            prompt_generator.llm_pipeline = prompt_generator._load_llm_pipeline(device=original_device)
+            prompt_generator.load_llm()
             
             # Process all descriptions in batches
             with torch.no_grad():  # Reduce memory usage during inference
@@ -168,11 +163,13 @@ def batch_process_dataset(dataset, start_index, dataset_name, prompt_generator, 
                     for description in batch_descriptions:
                         try:
                             moderated_description = prompt_generator.moderate(description)
-                            enhanced_description = prompt_generator.enhance(moderated_description)
-                            batch_final.append(enhanced_description)
+                            if annotation_task in ['t2v', 'i2v']:
+                                final_desc = prompt_generator.enhance(moderated_description)
+                            else:
+                                final_desc = moderated_description
+                            batch_final.append(final_desc)
                         except Exception as e:
                             print(f"Error processing description: {e}")
-                            # Fallback to original description if moderation/enhancement fails
                             batch_final.append(description)
                     
                     # Save this batch of annotations immediately
@@ -206,17 +203,14 @@ def batch_process_dataset(dataset, start_index, dataset_name, prompt_generator, 
         finally:
             # Clear LLM from memory
             print("Unloading LLM from GPU memory")
-            if prompt_generator.llm_pipeline:
-                prompt_generator.llm_pipeline.model.to('cpu')
-                del prompt_generator.llm_pipeline
-                prompt_generator.llm_pipeline = None
-            gc.collect()
-            torch.cuda.empty_cache()
+            prompt_generator.clear_gpu()
         
         # Clear chunk data to free memory
         chunk_images = None
         raw_descriptions = None
         gc.collect()
+        chunk_timer_end = time.time()
+        print(f"Chunk {chunk_start//chunk_size + 1} processed in {chunk_timer_end - chunk_timer_start:.2f} seconds.")
     
     duration = time.time() - start_time
     print(f"All {image_count} annotations generated and saved in {duration:.2f} seconds.")

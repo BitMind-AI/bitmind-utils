@@ -14,22 +14,40 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # Diffusion model to use
 if [ -z "$2" ]; then
-    DIFFUSION_MODEL='THUDM/CogVideoX1.5-5B-I2V'
+    DIFFUSION_MODEL=''
 else
     DIFFUSION_MODEL=$2
 fi
 
 # Define the datasets to process
 DATASETS=(
-    "google-images-holdout-deduped-commits_3"
-    #"google-images-holdout-deduped-commits_4"
-    #"google-images-holdout-deduped-commits_5"
+    ""
+)
+ 
+# Number of GPUs available on this host
+NUM_GPUS=10
+START_GPU=0
+
+# Set the starting index for generation
+GENERATION_START_INDEX=2000  # Start from index 2000
+GENERATION_COUNT=2000        # Generate 2000 images
+
+# Define dataset aliases
+declare -A DATASET_ALIASES=(
+    ["bm-real"]="bm"
+    ["celeb-a-hq"]="celeb"
+    ["ffhq-256"]="ffhq"
+    ["MS-COCO-unique-256"]="coco"
+    ["AFHQ"]="afhq"
+    ["lfw"]="lfw"
+    ["caltech-256"]="c256"
+    ["caltech-101"]="c101"
+    ["dtd"]="dtd"
+    ["idoc-mugshots-images"]="mug"
 )
 
-# Number of GPUs available on this host
-NUM_GPUS=1
-START_GPU=0
-END_GPU=0
+# Configurable split for annotation loading
+SPLIT=""  # Change this to your desired split (e.g., 'train', 't2i', 't2v', etc.)
 
 # Process each dataset sequentially
 for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
@@ -38,12 +56,22 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
     
     # Get dataset size by querying the annotations dataset
     echo "Determining dataset size..."
-    DATASET_SIZE=$(python -c "from datasets import load_dataset; print(len(load_dataset('bitmind/${DATASET}___annotations', split='train')))")
+    DATASET_SIZE=$(python -c "from datasets import load_dataset; print(len(load_dataset('sn34-test/${DATASET}___annotations', split='$SPLIT')))")
     echo "Dataset size: $DATASET_SIZE"
     
-    # Calculate indices per GPU (across all 30 GPUs)
-    TOTAL_GPUS=30
-    INDICES_PER_GPU=$(( ($DATASET_SIZE + $TOTAL_GPUS - 1) / $TOTAL_GPUS ))
+    # Check if we have enough data starting from GENERATION_START_INDEX
+    AVAILABLE_INDICES=$(( DATASET_SIZE - GENERATION_START_INDEX ))
+    if [ "$AVAILABLE_INDICES" -lt "$GENERATION_COUNT" ]; then
+        echo "Warning: Only $AVAILABLE_INDICES indices available starting from $GENERATION_START_INDEX"
+        echo "Adjusting generation count to $AVAILABLE_INDICES"
+        ACTUAL_GENERATION_COUNT=$AVAILABLE_INDICES
+    else
+        ACTUAL_GENERATION_COUNT=$GENERATION_COUNT
+    fi
+
+    # Calculate indices per GPU (across all GPUs)
+    TOTAL_GPUS=$NUM_GPUS
+    INDICES_PER_GPU=$(( ($ACTUAL_GENERATION_COUNT + $TOTAL_GPUS - 1) / $TOTAL_GPUS ))
     
     # Array to store job names for waiting
     declare -a JOB_NAMES=()
@@ -51,17 +79,25 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
     # Launch jobs for each GPU on this host
     for ((local_gpu=0; local_gpu<$NUM_GPUS; local_gpu++)); do
         global_gpu=$(( local_gpu + START_GPU ))
-        START_INDEX=$(( global_gpu * INDICES_PER_GPU ))
+        START_INDEX=$(( GENERATION_START_INDEX + global_gpu * INDICES_PER_GPU ))
         END_INDEX=$(( START_INDEX + INDICES_PER_GPU - 1 ))
         
-        # Ensure END_INDEX doesn't exceed dataset size
-        if [ $END_INDEX -ge $DATASET_SIZE ]; then
-            END_INDEX=$(( DATASET_SIZE - 1 ))
+        # Ensure END_INDEX doesn't exceed the actual generation range
+        MAX_END_INDEX=$(( GENERATION_START_INDEX + ACTUAL_GENERATION_COUNT - 1 ))
+        if [ $END_INDEX -gt $MAX_END_INDEX ]; then
+            END_INDEX=$MAX_END_INDEX
+        fi
+        
+        # Skip if START_INDEX is beyond our generation range
+        if [ $START_INDEX -gt $MAX_END_INDEX ]; then
+            echo "Skipping GPU $local_gpu - START_INDEX $START_INDEX exceeds generation range"
+            continue
         fi
         
         # Create a shorter custom name for the repository to avoid length issues
         MODEL_NAME=$(basename "$DIFFUSION_MODEL")
-        CUSTOM_REPO_NAME="${MODEL_NAME}_${START_INDEX}to${END_INDEX}"
+        DATASET_ALIAS=${DATASET_ALIASES[$DATASET]:-$DATASET}
+        CUSTOM_REPO_NAME="${DATASET_ALIAS}_${MODEL_NAME}_${START_INDEX}to${END_INDEX}"
         JOB_NAME="${DATASET}_mirror_${global_gpu}"
         JOB_NAMES+=("$JOB_NAME")
         
@@ -74,18 +110,21 @@ for ((dataset_idx=0; dataset_idx<${#DATASETS[@]}; dataset_idx++)); do
             --no-autorestart \
             -- \
             --hf_org "bitmind" \
+            --target_org 'sn34-test' \
             --real_image_dataset_name "$DATASET" \
             --diffusion_model "$DIFFUSION_MODEL" \
             --download_annotations \
             --skip_generate_annotations \
             --generate_synthetic_images \
-            --upload_synthetic_images \
             --download_real_images \
+            --annotation_split $SPLIT \
+            --private \
             --hf_token "$HF_TOKEN" \
             --start_index $START_INDEX \
             --end_index $END_INDEX \
             --gpu_id $local_gpu \
-            --output_repo_name "$CUSTOM_REPO_NAME"
+            --output_repo_name "$CUSTOM_REPO_NAME" \
+            --max_images $(( END_INDEX - START_INDEX + 1 ))
             
         # Add a small delay to prevent overwhelming the system
         sleep 2

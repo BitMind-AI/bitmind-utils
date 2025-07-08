@@ -1,5 +1,14 @@
 # Add this to synthetic_data_generator.py
 
+# Modify laod_model
+
+    def load_model(self, model_name: Optional[str] = None, modality: Optional[str] = None) -> None:
+        """Load a Hugging Face text-to-image or text-to-video model."""
+        if model_name is not None:
+            if self.model_name == model_name and self.model is not None:
+                # Model already loaded, do nothing
+                return
+
     def generate_from_prompt(
         self,
         prompt: str,
@@ -11,7 +20,7 @@
         
         Args:
             prompt: The text prompt to use for generation
-            task: Optional task type ('t2i', 't2v', 'i2i')
+            task: Optional task type ('t2i', 't2v', 'i2i', 'i2v')
             image: Optional input image for i2i generation
             generate_at_target_size: If True, generate at TARGET_IMAGE_SIZE dimensions
             
@@ -33,6 +42,8 @@
                 model_candidates = T2V_MODEL_NAMES
             elif task == 'i2i':
                 model_candidates = I2I_MODEL_NAMES
+            elif task == 'i2v':
+                model_candidates = I2V_MODEL_NAMES
             else:
                 raise ValueError(f"Unsupported task: {task}")
             
@@ -48,6 +59,5 @@
         )
         
         # Clean up GPU memory
-        self.clear_gpu()
-        
+        # self.clear_gpu()
         return gen_data
