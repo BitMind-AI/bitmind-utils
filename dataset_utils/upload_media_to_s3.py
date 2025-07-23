@@ -6,7 +6,7 @@ import concurrent.futures
 
 # --- S3 CONFIGURATION ---
 S3_BUCKET = "subnet-34-storage"  # Change as needed
-S3_PREFIX = "semisynthetics/"    # Change as needed, will be prepended to all S3 keys
+S3_PREFIX = "subnet-dataset/"    # Change as needed, will be prepended to all S3 keys
 AWS_PROFILE = "BitmindS3Access-891377275001"  # Change as needed
 
 def upload_file_to_s3(local_path, s3_key, s3_client):
