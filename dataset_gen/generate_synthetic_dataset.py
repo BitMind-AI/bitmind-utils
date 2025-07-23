@@ -13,7 +13,7 @@ import imghdr
 import io
 import numpy as np
 import cv2
-from glob import glob
+import glob
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -31,10 +31,7 @@ from diffusers.utils import export_to_video
 from bitmind.generation.prompt_generator import PromptGenerator
 from bitmind.generation.generation_pipeline import GenerationPipeline, IMAGE_ANNOTATION_MODEL, TEXT_MODERATION_MODEL
 from bitmind.generation.models import initialize_model_registry
-from bitmind.transforms import apply_random_augmentations
-from bitmind.generation.util.image import ensure_mask_3d
 
-TARGET_IMAGE_SIZE = (256, 256)
 PROGRESS_INCREMENT = 10
 
 
@@ -63,6 +60,7 @@ def parse_arguments():
         --private (bool): Optional. Upload the dataset as private
         --max_images (int): Optional. Maximum number of images to annotate per dataset.
         --annotation_split (str): Optional. Which split to load from the annotation dataset (default: train)
+        --local_image_dir (str): Optional. Path to a local directory of images to annotate.
     """
     parser = argparse.ArgumentParser(
         description='Generate synthetic images and annotations from a real dataset.'
@@ -178,6 +176,12 @@ def parse_arguments():
         default=False,
         help='Test a variety of mask randomization settings and log mask parameters/results to a JSONL file.'
     )
+    parser.add_argument(
+        '--local_image_dir',
+        type=str,
+        default=None,
+        help='Path to a local directory of images to annotate.'
+    )
     return parser.parse_args()
 
 
@@ -277,7 +281,12 @@ def generate_and_save_annotations(
 
     try:
         for index, real_image in enumerate(dataset):
-            adjusted_index = index + start_index
+            # For local datasets, the dataset is already sliced, so use the actual index
+            # For HF datasets, we need to add start_index
+            if args.local_image_dir:
+                adjusted_index = start_index + index
+            else:
+                adjusted_index = index + start_index
 
             # Generate annotation without reloading models
             annotation = {
@@ -343,17 +352,31 @@ def build_image_samples(annotations_chunk_dir: Path, model_registry, args, datas
                 image = None
             image_samples.append({'image': image, 'prompt': annotation['description'], 'id': idx})
     else:
-        for idx in range(args.start_index, args.end_index + 1):
-            item = dataset[idx]
-            image = item['image']
-            if isinstance(image, Image.Image):
-                if task in ['i2i', 'i2v']:
-                    if image.mode != 'RGB':
-                        image = image.convert('RGB')
-                    image = np.array(image)
-                else:
-                    image = None
-            image_samples.append({'image': image, 'id': idx})
+        # For local datasets, dataset is already sliced, so use enumerate
+        # For HF datasets, use range with start_index
+        if args.local_image_dir and dataset is not None:
+            for index, item in enumerate(dataset):
+                image = item['image']
+                if isinstance(image, Image.Image):
+                    if task in ['i2i', 'i2v']:
+                        if image.mode != 'RGB':
+                            image = image.convert('RGB')
+                        image = np.array(image)
+                    else:
+                        image = None
+                image_samples.append({'image': image, 'id': args.start_index + index})
+        elif dataset is not None:
+            for idx in range(args.start_index, args.end_index + 1):
+                item = dataset[idx]
+                image = item['image']
+                if isinstance(image, Image.Image):
+                    if task in ['i2i', 'i2v']:
+                        if image.mode != 'RGB':
+                            image = image.convert('RGB')
+                        image = np.array(image)
+                    else:
+                        image = None
+                image_samples.append({'image': image, 'id': idx})
     return image_samples
 
 def run_generation_pipeline(args, model_registry, output_dir, annotations_chunk_dir, real_images_chunk_dir, dataset=None):
@@ -367,44 +390,53 @@ def run_generation_pipeline(args, model_registry, output_dir, annotations_chunk_
     )
     print(f"Generation complete. Outputs saved to {output_dir}")
 
-def augment_and_overwrite_images_and_masks(output_dir):
-    """Augment and overwrite all images and masks in output_dir to TARGET_IMAGE_SIZE using level 0 augmentations."""
-    image_paths = glob(os.path.join(output_dir, '*.png'))
-    print(f"[AUGMENT] Found {len(image_paths)} images in {output_dir}")
-    for img_path in image_paths:
-        name = os.path.splitext(os.path.basename(img_path))[0]
-        mask_path = os.path.join(output_dir, f"{name}_mask.npy")
-        img = np.array(Image.open(img_path))
-        mask = np.load(mask_path) if os.path.exists(mask_path) else None
-        if mask is not None and hasattr(mask, 'ndim') and mask.ndim == 2:
-            mask = ensure_mask_3d(mask)
-        aug_img, aug_mask, _, _ = apply_random_augmentations(
-            img,
-            target_image_size=TARGET_IMAGE_SIZE,
-            mask=mask,
-            level_probs={0: 1.0}
-        )
-        Image.fromarray(aug_img).save(img_path)
-        if aug_mask is not None:
-            if aug_mask.ndim == 3 and aug_mask.shape[2] == 1:
-                aug_mask = np.squeeze(aug_mask, axis=2)
-            np.save(mask_path, aug_mask)
+def load_local_images(image_dir):
+    image_paths = sorted(glob.glob(os.path.join(image_dir, '*')))
+    dataset = []
+    for idx, path in enumerate(image_paths):
+        try:
+            img = Image.open(path).convert('RGB')
+            dataset.append({'image': img, 'id': idx, 'path': path})
+        except Exception as e:
+            print(f"Failed to load {path}: {e}")
+    return dataset
 
 def main():
     args = parse_arguments()
-    hf_dataset_name = f"{args.hf_org}/{args.real_image_dataset_name}"
-    print(f"Loading dataset {hf_dataset_name} to determine size...")
-    dataset = load_dataset(hf_dataset_name, split='train')
-    dataset_size = len(dataset)
-    print(f"Dataset size: {dataset_size} images")
-    if args.max_images is not None:
-        args.end_index = args.start_index + args.max_images - 1
-        if args.end_index >= dataset_size:
+    dataset = None
+    if args.local_image_dir:
+        dataset = load_local_images(args.local_image_dir)
+        dataset_size = len(dataset)
+        print(f"Loaded {dataset_size} images from {args.local_image_dir}")
+        
+        # Handle case where start_index is beyond dataset size
+        if args.start_index >= dataset_size:
+            print(f"Warning: start_index {args.start_index} >= dataset_size {dataset_size}. No images to process.")
+            dataset = []
+        else:
+            # Adjust end_index to be within bounds
+            if args.end_index is None or args.end_index >= dataset_size:
+                args.end_index = dataset_size - 1
+            
+            # Slice the dataset
+            dataset = dataset[args.start_index:args.end_index + 1]
+            print(f"Sliced dataset to images {args.start_index}-{args.end_index} ({len(dataset)} images)")
+        
+        hf_dataset_name = args.local_image_dir
+    else:
+        hf_dataset_name = f"{args.hf_org}/{args.real_image_dataset_name}"
+        print(f"Loading dataset {hf_dataset_name} to determine size...")
+        dataset = load_dataset(hf_dataset_name, split='train')
+        dataset_size = len(dataset)
+        print(f"Dataset size: {dataset_size} images")
+        if args.max_images is not None:
+            args.end_index = args.start_index + args.max_images - 1
+            if args.end_index >= dataset_size:
+                args.end_index = dataset_size - 1
+                print(f"Adjusted end_index to {args.end_index} (dataset size - 1)")
+        elif args.end_index is None or args.end_index >= dataset_size:
             args.end_index = dataset_size - 1
             print(f"Adjusted end_index to {args.end_index} (dataset size - 1)")
-    elif args.end_index is None or args.end_index >= dataset_size:
-        args.end_index = dataset_size - 1
-        print(f"Adjusted end_index to {args.end_index} (dataset size - 1)")
     model_name = args.diffusion_model.split('/')[-1]
     data_range = f"{args.start_index}-to-{args.end_index}"
     default_name = f"{hf_dataset_name}___{data_range}___{model_name}"
@@ -462,24 +494,25 @@ def main():
             print("Annotations already saved to disk.")
     elif not args.skip_generate_annotations:
         print("Generating new annotations.")
-        dataset = load_dataset(hf_dataset_name, split='train')
-        images_chunk = slice_dataset(dataset, start_index=args.start_index, end_index=args.end_index)
-        dataset = None
+        if args.local_image_dir:
+            images_chunk = dataset
+        else:
+            dataset = load_dataset(hf_dataset_name, split='train')
+            images_chunk = slice_dataset(dataset, start_index=args.start_index, end_index=args.end_index)
         generate_and_save_annotations(images_chunk, args.start_index, hf_dataset_name, prompt_generator, annotations_chunk_dir, args, batch_size)
         prompt_generator.clear_gpu()
-        images_chunk = None
     if args.generate_synthetic_images:
         if not args.diffusion_model:
             raise ValueError("--diffusion_model is required when --generate_synthetic_images is specified")
-            
-        if task in ['t2v', 'i2v']:
-            output_dir = Path(f'test_data/synthetic_videos/{model_name}/{args.real_image_dataset_name}/{args.start_index}_{args.end_index}')
+        if args.local_image_dir:
+            image_samples = dataset
         else:
-            output_dir = Path(f'test_data/synthetic_images/{model_name}/{args.real_image_dataset_name}/{args.start_index}_{args.end_index}')
-        output_dir.mkdir(parents=True, exist_ok=True)
-        run_generation_pipeline(args, model_registry, output_dir, annotations_chunk_dir, real_images_chunk_dir, dataset)
-        #augment_and_overwrite_images_and_masks(output_dir)
-
+            if task in ['t2v', 'i2v']:
+                output_dir = Path(f'test_data/synthetic_videos/{model_name}/{args.real_image_dataset_name}/{args.start_index}_{args.end_index}')
+            else:
+                output_dir = Path(f'test_data/synthetic_images/{model_name}/{args.real_image_dataset_name}/{args.start_index}_{args.end_index}')
+            output_dir.mkdir(parents=True, exist_ok=True)
+            run_generation_pipeline(args, model_registry, output_dir, annotations_chunk_dir, real_images_chunk_dir, dataset)
 
 if __name__ == "__main__":
     main()
